@@ -88,21 +88,40 @@ export async function startTournament(tournamentId: string) {
   }
 
   const abortStart = async () => {
-    await sql(
+    // Only roll back our unfinished claim; never touch a linked live table.
+    const reverted = await sql(
       `update tournaments
        set status = 'scheduled',
            table_id = null,
            blind_level = 1,
            level_started_at = null,
            prize_pool = 0
-       where id = $1 and status = 'running' and table_id is null`,
+       where id = $1 and status = 'running' and table_id is null
+       returning id`,
       [tournamentId],
     );
-    await sql(`delete from table_runtime where table_id = $1`, [tableId]);
-    await sql(`delete from table_seats where table_id = $1`, [tableId]);
-    await sql(`delete from cash_tables where id = $1`, [tableId]);
+    if (!reverted.length) return;
+    await sql(
+      `delete from table_runtime
+       where table_id = $1
+         and not exists (select 1 from tournaments t where t.table_id = $1)`,
+      [tableId],
+    );
+    await sql(
+      `delete from table_seats
+       where table_id = $1
+         and not exists (select 1 from tournaments t where t.table_id = $1)`,
+      [tableId],
+    );
+    await sql(
+      `delete from cash_tables
+       where id = $1
+         and not exists (select 1 from tournaments t where t.table_id = $1)`,
+      [tableId],
+    );
   };
 
+  let linked = false;
   try {
     const entries = await sql<{
       member_id: string;
@@ -116,11 +135,10 @@ export async function startTournament(tournamentId: string) {
       [tournamentId],
     );
 
-    if (entries.length < 2 || entries.length > 9) {
-      await abortStart();
-      if (entries.length < 2) {
-        throw new Error("Need at least 2 registered players to start");
-      }
+    if (entries.length < 2) {
+      throw new Error("Need at least 2 registered players to start");
+    }
+    if (entries.length > 9) {
       throw new Error("Single-table start supports up to 9 players");
     }
 
@@ -158,21 +176,22 @@ export async function startTournament(tournamentId: string) {
       [tableId],
     );
 
-    const linked = await sql(
+    const linkedRows = await sql(
       `update tournaments
        set table_id = $2, prize_pool = $3
        where id = $1 and status = 'running' and table_id is null
        returning id`,
       [tournamentId, tableId, prizePool],
     );
-    if (!linked.length) {
+    if (!linkedRows.length) {
       throw new Error("Tournament already started or finished");
     }
+    linked = true;
 
     const rows = await listTournaments();
     return rows.find((t) => t.id === tournamentId)!;
   } catch (error) {
-    await abortStart().catch(() => undefined);
+    if (!linked) await abortStart().catch(() => undefined);
     throw error;
   }
 }
