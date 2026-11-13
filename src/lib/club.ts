@@ -350,3 +350,82 @@ export async function joinByInvite(inviteCode: string, displayName: string) {
   if (!club) throw new Error("Invalid club invite code");
   return addMember(displayName, 5000);
 }
+
+export async function getTournament(tournamentId: string) {
+  await ensureClubSeeded();
+  const rows = await listTournaments();
+  const tournament = rows.find((t) => t.id === tournamentId);
+  if (!tournament) throw new Error("Tournament not found");
+  return tournament;
+}
+
+export async function listMyTournamentIds(memberId: string) {
+  const rows = await sql<{ tournament_id: string }>(
+    `select tournament_id from tournament_entries where member_id = $1`,
+    [memberId],
+  );
+  return rows.map((r) => r.tournament_id);
+}
+
+export async function registerForTournament(tournamentId: string, memberId: string) {
+  await ensureClubSeeded();
+  const tournament = await getTournament(tournamentId);
+  if (!["scheduled", "running"].includes(tournament.status)) {
+    throw new Error("Tournament is not open for registration");
+  }
+  const entries = Number(tournament.entries ?? 0);
+  if (entries >= tournament.max_players) throw new Error("Tournament is full");
+
+  const existing = await sql(
+    `select 1 from tournament_entries where tournament_id = $1 and member_id = $2`,
+    [tournamentId, memberId],
+  );
+  if (existing.length) throw new Error("Already registered");
+
+  const total = num(tournament.buy_in) + num(tournament.fee);
+  await sendChips(memberId, -total, `mtt_register:${tournamentId}`);
+  await sql(
+    `insert into tournament_entries (tournament_id, member_id) values ($1, $2)`,
+    [tournamentId, memberId],
+  );
+
+  // Club fee stays as club rake/revenue for now
+  if (num(tournament.fee) > 0) {
+    await sql(
+      `update club_rake set total_rake = total_rake + $1, updated_at = now() where club_id = $2`,
+      [num(tournament.fee), DEFAULT_CLUB_ID],
+    );
+  }
+
+  return getTournament(tournamentId);
+}
+
+export async function unregisterFromTournament(
+  tournamentId: string,
+  memberId: string,
+) {
+  await ensureClubSeeded();
+  const tournament = await getTournament(tournamentId);
+  if (tournament.status !== "scheduled") {
+    throw new Error("Can only unregister before the tournament starts");
+  }
+  const existing = await sql(
+    `select 1 from tournament_entries where tournament_id = $1 and member_id = $2`,
+    [tournamentId, memberId],
+  );
+  if (!existing.length) throw new Error("Not registered");
+
+  await sql(
+    `delete from tournament_entries where tournament_id = $1 and member_id = $2`,
+    [tournamentId, memberId],
+  );
+  const refund = num(tournament.buy_in) + num(tournament.fee);
+  await sendChips(memberId, refund, `mtt_unregister:${tournamentId}`);
+  if (num(tournament.fee) > 0) {
+    await sql(
+      `update club_rake set total_rake = greatest(total_rake - $1, 0), updated_at = now() where club_id = $2`,
+      [num(tournament.fee), DEFAULT_CLUB_ID],
+    );
+  }
+  return getTournament(tournamentId);
+}

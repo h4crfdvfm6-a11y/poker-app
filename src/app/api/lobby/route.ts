@@ -1,4 +1,10 @@
-import { getBbjp, getOverview, listTables, listTournaments } from "@/lib/club";
+import {
+  getBbjp,
+  getOverview,
+  listMyTournamentIds,
+  listTables,
+  listTournaments,
+} from "@/lib/club";
 import { getPlayerId } from "@/lib/session";
 import { sql } from "@/lib/db";
 
@@ -11,12 +17,14 @@ export async function GET() {
   const bbjp = await getBbjp();
   const playerId = await getPlayerId();
   let me = null;
+  let myTournamentIds: string[] = [];
   if (playerId) {
     const rows = await sql(
       "select id, display_name, chip_balance, role from members where id = $1",
       [playerId],
     );
     me = rows[0] ?? null;
+    myTournamentIds = await listMyTournamentIds(playerId);
   }
   return Response.json({
     club: overview.club,
@@ -28,5 +36,6 @@ export async function GET() {
       trigger_hand: bbjp.trigger_hand,
     },
     me,
+    myTournamentIds,
   });
 }

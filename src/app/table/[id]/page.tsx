@@ -55,6 +55,12 @@ type TableView = {
     }>;
   };
   actions: Array<{ type: string; label: string; amount?: number }>;
+  sizing: null | {
+    kind: "bet" | "raise";
+    min: number;
+    max: number;
+    presets: number[];
+  };
   phase: string;
   version: number;
   bbjp: { balance: number; enabled: boolean; trigger: string };
@@ -104,6 +110,7 @@ export default function TablePage() {
   const [view, setView] = useState<TableView | null>(null);
   const [error, setError] = useState("");
   const [buyIn, setBuyIn] = useState("");
+  const [raiseTo, setRaiseTo] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -115,6 +122,15 @@ export default function TablePage() {
     }
     setView(json);
     if (!buyIn && json.table) setBuyIn(String(json.table.buyinMin));
+    if (json.sizing) {
+      setRaiseTo((prev) => {
+        const n = Number(prev);
+        if (!prev || n < json.sizing.min || n > json.sizing.max) {
+          return String(json.sizing.min);
+        }
+        return prev;
+      });
+    }
   }, [tableId, buyIn]);
 
   useEffect(() => {
@@ -306,17 +322,64 @@ export default function TablePage() {
       </div>
 
       {view.actions?.length ? (
-        <div className="mb-3 grid grid-cols-2 gap-2">
-          {view.actions.map((a) => (
-            <button
-              key={a.label}
-              className={`btn !py-3 ${a.type === "fold" ? "btn-danger" : "btn-gold"}`}
-              disabled={busy}
-              onClick={() => act(a.type, a.amount)}
-            >
-              {a.label}
-            </button>
-          ))}
+        <div className="mb-3 grid gap-3">
+          {view.sizing ? (
+            <div className="panel grid gap-2 p-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[var(--muted)]">
+                  {view.sizing.kind === "bet" ? "Bet size" : "Raise to"}
+                </span>
+                <span className="text-[var(--gold-strong)]">
+                  {Number(raiseTo || view.sizing.min).toLocaleString()}
+                </span>
+              </div>
+              <input
+                className="w-full"
+                type="range"
+                min={view.sizing.min}
+                max={view.sizing.max}
+                step={Math.max(1, Math.floor(view.table.bb / 2))}
+                value={Number(raiseTo || view.sizing.min)}
+                onChange={(e) => setRaiseTo(e.target.value)}
+              />
+              <div className="flex flex-wrap gap-2">
+                {view.sizing.presets.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    className="btn btn-ghost !py-1 !text-xs"
+                    onClick={() => setRaiseTo(String(p))}
+                  >
+                    {p.toLocaleString()}
+                  </button>
+                ))}
+              </div>
+              <button
+                className="btn btn-gold"
+                disabled={busy}
+                onClick={() =>
+                  act(view.sizing!.kind, Number(raiseTo || view.sizing!.min))
+                }
+              >
+                {view.sizing.kind === "bet" ? "Bet" : "Raise to"}{" "}
+                {Number(raiseTo || view.sizing.min).toLocaleString()}
+              </button>
+            </div>
+          ) : null}
+          <div className="grid grid-cols-2 gap-2">
+            {view.actions
+              .filter((a) => !["bet", "raise"].includes(a.type))
+              .map((a) => (
+                <button
+                  key={a.label}
+                  className={`btn !py-3 ${a.type === "fold" ? "btn-danger" : "btn-gold"}`}
+                  disabled={busy}
+                  onClick={() => act(a.type, a.amount)}
+                >
+                  {a.label}
+                </button>
+              ))}
+          </div>
         </div>
       ) : (
         <p className="mb-3 text-sm text-[var(--muted)]">

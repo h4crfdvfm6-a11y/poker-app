@@ -255,10 +255,10 @@ export async function getTableView(tableId: string, viewerMemberId: string | nul
 
   const bbjp = await getBbjp();
   const mySeat = runtime.state?.seats.find((s) => s.memberId === viewerMemberId);
-  const actions =
+  const legal =
     runtime.state && mySeat
       ? legalActions(runtime.state, mySeat.seat)
-      : [];
+      : { actions: [], sizing: null };
   const myTableSeat = seats.find((s) => s.member_id === viewerMemberId);
 
   return {
@@ -286,7 +286,8 @@ export async function getTableView(tableId: string, viewerMemberId: string | nul
       empty: !s.member_id,
     })),
     hand: maskState(runtime.state, viewerMemberId),
-    actions,
+    actions: legal.actions,
+    sizing: legal.sizing,
     phase: runtime.phase,
     version: runtime.version,
     bbjp: {
@@ -546,13 +547,27 @@ export async function playerAction(
   return getTableView(tableId, memberId);
 }
 
-export function legalActions(state: EngineState, seatNo: number) {
+export type LegalAction = {
+  type: ActionType;
+  label: string;
+  amount?: number;
+};
+
+export type SizingInfo = {
+  kind: "bet" | "raise";
+  min: number;
+  max: number;
+  presets: number[];
+};
+
+export function legalActions(state: EngineState, seatNo: number): {
+  actions: LegalAction[];
+  sizing: SizingInfo | null;
+} {
   const seat = state.seats.find((s) => s.seat === seatNo);
-  if (!seat || state.toAct !== seatNo) return [];
+  if (!seat || state.toAct !== seatNo) return { actions: [], sizing: null };
   const toCall = Math.max(0, state.currentBet - seat.bet);
-  const actions: Array<{ type: ActionType; label: string; amount?: number }> = [
-    { type: "fold", label: "Fold" },
-  ];
+  const actions: LegalAction[] = [{ type: "fold", label: "Fold" }];
   if (toCall === 0) actions.push({ type: "check", label: "Check" });
   else {
     actions.push({
@@ -561,18 +576,50 @@ export function legalActions(state: EngineState, seatNo: number) {
       amount: Math.min(toCall, seat.stack),
     });
   }
+
+  let sizing: SizingInfo | null = null;
+  const maxTo = seat.bet + seat.stack;
   if (seat.stack > toCall) {
     if (state.currentBet === 0) {
-      actions.push({ type: "bet", label: `Bet ${state.bb}`, amount: seat.bet + state.bb });
+      const min = Math.min(maxTo, seat.bet + state.bb);
+      sizing = {
+        kind: "bet",
+        min,
+        max: maxTo,
+        presets: uniquePresets(min, maxTo, state.bb, publicPot(state)),
+      };
+      actions.push({ type: "bet", label: `Bet ${min}`, amount: min });
     } else {
       const minTo = state.currentBet + state.minRaise;
-      if (minTo - seat.bet <= seat.stack) {
+      if (minTo <= maxTo) {
+        sizing = {
+          kind: "raise",
+          min: minTo,
+          max: maxTo,
+          presets: uniquePresets(minTo, maxTo, state.bb, publicPot(state)),
+        };
         actions.push({ type: "raise", label: `Raise to ${minTo}`, amount: minTo });
       }
     }
-    actions.push({ type: "allin", label: `All-in ${seat.stack + seat.bet}` });
+    actions.push({ type: "allin", label: `All-in ${maxTo}`, amount: maxTo });
   }
-  return actions;
+  return { actions, sizing };
+}
+
+function uniquePresets(min: number, max: number, bb: number, pot: number) {
+  const candidates = [
+    min,
+    Math.round(pot * 0.5),
+    Math.round(pot * 0.75),
+    pot,
+    Math.round(pot * 1.5),
+    min + bb * 2,
+    min + bb * 4,
+    max,
+  ]
+    .map((n) => Math.max(min, Math.min(max, Math.round(n))))
+    .filter((n) => n >= min && n <= max);
+  return [...new Set(candidates)].sort((a, b) => a - b).slice(0, 6);
 }
 
 void cardId;
