@@ -37,6 +37,8 @@ export async function GET() {
       balance: bbjp.balance,
       enabled: bbjp.enabled,
       trigger_hand: bbjp.trigger_hand,
+      cycle_collections: bbjp.cycle_collections,
+      minimum_hand: bbjp.minimum_hand,
     },
     me,
     myTournamentIds,

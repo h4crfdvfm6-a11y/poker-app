@@ -30,7 +30,13 @@ type LobbyData = {
     prize_pool?: string | number;
     blind_level?: number;
   }>;
-  bbjp: { balance: string | number; enabled: boolean; trigger_hand: string };
+  bbjp: {
+    balance: string | number;
+    enabled: boolean;
+    trigger_hand: string;
+    cycle_collections?: number;
+    minimum_hand?: string;
+  };
   me: { id: string; display_name: string; chip_balance: string | number } | null;
   myTournamentIds: string[];
 };
@@ -128,7 +134,12 @@ export default function LobbyPage() {
         </div>
         <div className="bbjp-meta text-right text-xs">
           <div>{data.bbjp.enabled ? "Live" : "Off"}</div>
-          <div>Trigger {data.bbjp.trigger_hand}</div>
+          <div>
+            Min {data.bbjp.minimum_hand || data.bbjp.trigger_hand}
+          </div>
+          <div>
+            Cycle {money(data.bbjp.cycle_collections ?? 0)}
+          </div>
         </div>
       </div>
 

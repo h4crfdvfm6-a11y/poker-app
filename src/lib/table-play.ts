@@ -1,6 +1,14 @@
 import { sql } from "./db";
 import { id } from "./ids";
-import { DEFAULT_CLUB_ID, ensureClubSeeded, getBbjp, num, sendChips } from "./club";
+import {
+  DEFAULT_CLUB_ID,
+  bumpBbjpCollections,
+  ensureClubSeeded,
+  getBbjp,
+  num,
+  resetBbjpCollectionsCycle,
+  sendChips,
+} from "./club";
 import {
   applyAction,
   botDecision,
@@ -146,9 +154,12 @@ async function applyHandEconomy(tableId: string, state: EngineState) {
     );
   }
   if (bbjpFee > 0) {
+    const hand = await bumpBbjpCollections(bbjpFee);
     await sql(
-      `update bbjp_settings set balance = balance + $1, updated_at = now() where club_id = $2`,
-      [bbjpFee, DEFAULT_CLUB_ID],
+      `update bbjp_settings
+       set balance = balance + $1, trigger_hand = $2, updated_at = now()
+       where club_id = $3`,
+      [bbjpFee, hand, DEFAULT_CLUB_ID],
     );
   }
   if (state.result.bbjpHit) {
@@ -190,8 +201,10 @@ async function applyHandEconomy(tableId: string, state: EngineState) {
           o!.stack += amt;
         });
       }
+      // Award starts a new jackpot collections cycle (ladder → AAAKK).
+      await resetBbjpCollectionsCycle();
       state.log.push(
-        `BBJP paid ${loserPay} to ${loser.name}, ${winnerPay} to ${winner.name}`,
+        `BBJP paid ${loserPay} to ${loser.name}, ${winnerPay} to ${winner.name} · ladder reset`,
       );
     }
   }
@@ -379,7 +392,9 @@ export async function getTableView(
     bbjp: {
       balance: num(bbjp.balance),
       enabled: bbjp.enabled,
-      trigger: bbjp.trigger_hand,
+      trigger: bbjp.minimum_hand ?? bbjp.trigger_hand,
+      collections: num(bbjp.cycle_collections ?? 0),
+      minimumHand: bbjp.minimum_hand ?? bbjp.trigger_hand,
     },
   };
 }

@@ -8,7 +8,13 @@ type Overview = {
   members: number;
   openTables: number;
   activeTournaments: number;
-  bbjp: { balance: string; enabled: boolean; trigger_hand: string };
+  bbjp: {
+    balance: string;
+    enabled: boolean;
+    trigger_hand: string;
+    cycle_collections?: number;
+    minimum_hand?: string;
+  };
   totalRake: number;
 };
 
@@ -49,6 +55,8 @@ type Bbjp = {
   balance: string;
   enabled: boolean;
   trigger_hand: string;
+  cycle_collections: number;
+  minimum_hand: string;
   topups: Array<{ id: string; amount: string; created_at: string }>;
 };
 
@@ -726,7 +734,12 @@ export default function AdminPage() {
               {money(bbjp.balance)}
             </div>
             <p className="bbjp-meta mt-2 text-sm">
-              {bbjp.enabled ? "Enabled" : "Disabled"} · trigger {bbjp.trigger_hand}
+              {bbjp.enabled ? "Enabled" : "Disabled"} · minimum{" "}
+              {bbjp.minimum_hand || bbjp.trigger_hand}
+            </p>
+            <p className="bbjp-meta mt-1 text-sm">
+              Cycle collections {money(bbjp.cycle_collections ?? 0)} (ladder, not
+              balance)
             </p>
             <div className="mt-4 flex gap-2">
               {bbjp.enabled ? (
@@ -756,7 +769,8 @@ export default function AdminPage() {
           >
             <h2 className="brand text-xl">Top up BBJP</h2>
             <p className="text-sm text-[var(--muted)]">
-              Minimum 100 chips. Top-ups cannot be withdrawn.
+              Minimum 100 chips. Top-ups raise the pool and the collections
+              ladder. After an award the ladder resets toward AAAKK.
             </p>
             <input
               className="field"
@@ -770,18 +784,32 @@ export default function AdminPage() {
           </form>
 
           <div className="panel p-4">
-            <h2 className="brand mb-3 text-xl">Trigger hand</h2>
-            <div className="flex flex-wrap gap-2">
-              {["AAA22", "AAA88", "AAAJJ", "AAAKK"].map((hand) => (
-                <button
-                  key={hand}
-                  className={`btn !py-2 !text-sm ${
-                    bbjp.trigger_hand === hand ? "btn-gold" : "btn-ghost"
+            <h2 className="brand mb-2 text-xl">Collections ladder</h2>
+            <p className="mb-3 text-sm text-[var(--muted)]">
+              Minimum losing hand follows jackpot-cycle collections (£50 bands).
+              Current: {bbjp.minimum_hand || bbjp.trigger_hand}
+            </p>
+            <div className="grid gap-1 text-sm">
+              {[
+                ["0–50", "AAAKK"],
+                ["51–100", "AAAQQ"],
+                ["101–150", "AAAJJ"],
+                ["151–200", "AAA1010"],
+                ["201–250", "AAA99"],
+                ["251–300", "AAA88"],
+                ["…", "down to AAA22"],
+              ].map(([band, hand]) => (
+                <div
+                  key={band}
+                  className={`flex justify-between rounded-lg px-3 py-2 ${
+                    hand === (bbjp.minimum_hand || bbjp.trigger_hand)
+                      ? "bg-[rgba(93,202,134,0.2)]"
+                      : "bg-black/15"
                   }`}
-                  onClick={() => bbjpAction("trigger", { triggerHand: hand })}
                 >
-                  {hand}
-                </button>
+                  <span className="text-[var(--muted)]">{band}</span>
+                  <span className="font-semibold">{hand}</span>
+                </div>
               ))}
             </div>
           </div>

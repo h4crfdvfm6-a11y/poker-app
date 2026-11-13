@@ -126,11 +126,20 @@ export function meetsBbjpTrigger(score: HandScore, trigger: string): boolean {
   const pair = score[2] ?? 0;
   const map: Record<string, [number, number]> = {
     AAA22: [14, 2],
+    AAA33: [14, 3],
+    AAA44: [14, 4],
+    AAA55: [14, 5],
+    AAA66: [14, 6],
+    AAA77: [14, 7],
     AAA88: [14, 8],
+    AAA99: [14, 9],
+    AAA1010: [14, 10],
+    AAATT: [14, 10],
     AAAJJ: [14, 11],
+    AAAQQ: [14, 12],
     AAAKK: [14, 13],
   };
-  const need = map[trigger] ?? [14, 11];
+  const need = map[trigger] ?? [14, 13];
   if (trip > need[0]) return true;
   if (trip < need[0]) return false;
   return pair >= need[1];

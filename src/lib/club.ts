@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { minimumHandFromCollections } from "./bbjp-ladder";
 import { sql, withTransaction } from "./db";
 import { id } from "./ids";
 
@@ -75,8 +76,9 @@ export async function ensureClubSeeded() {
     [DEFAULT_CLUB_ID, "FA Poker Club", clubInviteCode()],
   );
   await sql(
-    "insert into bbjp_settings (club_id, balance, enabled, trigger_hand) values ($1, 0, false, $2)",
-    [DEFAULT_CLUB_ID, "AAAJJ"],
+    `insert into bbjp_settings (club_id, balance, enabled, trigger_hand, cycle_collections)
+     values ($1, 0, false, $2, 0)`,
+    [DEFAULT_CLUB_ID, "AAAKK"],
   );
   await sql(
     "insert into club_rake (club_id, total_rake) values ($1, 0)",
@@ -125,10 +127,7 @@ export async function getOverview(clubId = DEFAULT_CLUB_ID) {
     "select count(*)::text as c from tournaments where club_id = $1 and status in ('scheduled','running')",
     [clubId],
   );
-  const [bbjp] = await sql<{ balance: string; enabled: boolean; trigger_hand: string }>(
-    "select balance, enabled, trigger_hand from bbjp_settings where club_id = $1",
-    [clubId],
-  );
+  const bbjp = await getBbjp(clubId);
   const [rake] = await sql<{ total_rake: string }>(
     "select total_rake from club_rake where club_id = $1",
     [clubId],
@@ -138,7 +137,13 @@ export async function getOverview(clubId = DEFAULT_CLUB_ID) {
     members: Number(members[0]?.c ?? 0),
     openTables: Number(tables[0]?.c ?? 0),
     activeTournaments: Number(tournaments[0]?.c ?? 0),
-    bbjp,
+    bbjp: {
+      balance: bbjp.balance,
+      enabled: bbjp.enabled,
+      trigger_hand: bbjp.trigger_hand,
+      cycle_collections: bbjp.cycle_collections,
+      minimum_hand: bbjp.minimum_hand,
+    },
     totalRake: num(rake?.total_rake ?? 0),
   };
 }
@@ -325,24 +330,47 @@ export async function getBbjp(clubId = DEFAULT_CLUB_ID) {
     balance: string;
     enabled: boolean;
     trigger_hand: string;
-  }>("select balance, enabled, trigger_hand from bbjp_settings where club_id = $1", [
-    clubId,
-  ]);
+    cycle_collections: string;
+  }>(
+    `select balance, enabled, trigger_hand, coalesce(cycle_collections, 0) as cycle_collections
+     from bbjp_settings where club_id = $1`,
+    [clubId],
+  );
+  const collections = num(row?.cycle_collections ?? 0);
+  const minimumHand = minimumHandFromCollections(collections);
+  // Keep stored trigger aligned with the collections ladder.
+  if (row && row.trigger_hand !== minimumHand) {
+    await sql(
+      `update bbjp_settings set trigger_hand = $1, updated_at = now() where club_id = $2`,
+      [minimumHand, clubId],
+    );
+  }
   const topups = await sql<{ id: string; amount: string; created_at: string }>(
     `select id, amount, created_at from bbjp_topups where club_id = $1 order by created_at desc limit 20`,
     [clubId],
   );
-  return { ...row, topups };
+  return {
+    balance: row?.balance ?? "0",
+    enabled: Boolean(row?.enabled),
+    trigger_hand: minimumHand,
+    cycle_collections: collections,
+    minimum_hand: minimumHand,
+    topups,
+  };
 }
 
+/** Add to pool + jackpot-cycle collections (top-ups count toward the ladder). */
 export async function topUpBbjp(amount: number) {
   if (!Number.isFinite(amount) || amount < 100) {
     throw new Error("BBJP top-up must be at least 100 chips");
   }
   await ensureClubSeeded();
+  const hand = await bumpBbjpCollections(amount);
   await sql(
-    "update bbjp_settings set balance = balance + $1, updated_at = now() where club_id = $2",
-    [amount, DEFAULT_CLUB_ID],
+    `update bbjp_settings
+     set balance = balance + $1, trigger_hand = $2, updated_at = now()
+     where club_id = $3`,
+    [amount, hand, DEFAULT_CLUB_ID],
   );
   await sql(
     "insert into bbjp_topups (id, club_id, amount) values ($1, $2, $3)",
@@ -367,13 +395,40 @@ export async function setBbjpEnabled(enabled: boolean) {
   return getBbjp();
 }
 
-export async function setBbjpTrigger(triggerHand: string) {
-  await ensureClubSeeded();
-  await sql(
-    "update bbjp_settings set trigger_hand = $1, updated_at = now() where club_id = $2",
-    [triggerHand, DEFAULT_CLUB_ID],
-  );
+/** Ladder is collections-driven — manual trigger edits are ignored. */
+export async function setBbjpTrigger(_triggerHand: string) {
   return getBbjp();
+}
+
+/** Increment jackpot-cycle collections and return the new ladder hand. */
+export async function bumpBbjpCollections(amount: number, clubId = DEFAULT_CLUB_ID) {
+  const [row] = await sql<{ cycle_collections: string }>(
+    `update bbjp_settings
+     set cycle_collections = coalesce(cycle_collections, 0) + $1,
+         updated_at = now()
+     where club_id = $2
+     returning cycle_collections`,
+    [amount, clubId],
+  );
+  const collections = num(row?.cycle_collections ?? 0);
+  const hand = minimumHandFromCollections(collections);
+  await sql(
+    `update bbjp_settings set trigger_hand = $1 where club_id = $2`,
+    [hand, clubId],
+  );
+  return hand;
+}
+
+/** After an approved award: new collections cycle → ladder back toward AAAKK. */
+export async function resetBbjpCollectionsCycle(clubId = DEFAULT_CLUB_ID) {
+  await sql(
+    `update bbjp_settings
+     set cycle_collections = 0,
+         trigger_hand = $1,
+         updated_at = now()
+     where club_id = $2`,
+    ["AAAKK", clubId],
+  );
 }
 
 export async function joinByInvite(inviteCode: string, displayName: string) {

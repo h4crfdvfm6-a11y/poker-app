@@ -74,7 +74,13 @@ type TableView = {
   };
   phase: string;
   version: number;
-  bbjp: { balance: number; enabled: boolean; trigger: string };
+  bbjp: {
+    balance: number;
+    enabled: boolean;
+    trigger: string;
+    collections?: number;
+    minimumHand?: string;
+  };
 };
 
 const SEAT_POS = [
@@ -257,6 +263,12 @@ export default function TablePage() {
             <>
               <div className="bbjp-text font-semibold">
                 BBJP {view.bbjp.balance.toLocaleString()}
+              </div>
+              <div>
+                Min {view.bbjp.minimumHand || view.bbjp.trigger}
+                {view.bbjp.collections != null
+                  ? ` · cycle ${view.bbjp.collections.toLocaleString()}`
+                  : ""}
               </div>
               <div>{view.phase}</div>
             </>
