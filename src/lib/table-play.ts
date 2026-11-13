@@ -151,9 +151,21 @@ async function applyHandEconomy(tableId: string, state: EngineState) {
     );
   }
   if (state.result.bbjpHit) {
-    const bbjp = await getBbjp();
-    const pool = num(bbjp.balance);
-    if (pool > 0 && bbjp.enabled) {
+    const claimed = await sql<{ pool: string }>(
+      `with old as (
+         select club_id, balance as pool
+         from bbjp_settings
+         where club_id = $1 and enabled = true and balance > 0
+       )
+       update bbjp_settings b
+       set balance = 0, updated_at = now()
+       from old
+       where b.club_id = old.club_id and b.balance = old.pool
+       returning old.pool`,
+      [DEFAULT_CLUB_ID],
+    );
+    const pool = num(claimed[0]?.pool ?? 0);
+    if (pool > 0) {
       const hit = state.result.bbjpHit;
       const loserPay = Math.floor(pool * hit.loserShare * 100) / 100;
       const winnerPay = Math.floor(pool * hit.winnerShare * 100) / 100;
@@ -177,10 +189,6 @@ async function applyHandEconomy(tableId: string, state: EngineState) {
           o!.stack += amt;
         });
       }
-      await sql(
-        `update bbjp_settings set balance = 0, updated_at = now() where club_id = $1`,
-        [DEFAULT_CLUB_ID],
-      );
       state.log.push(
         `BBJP paid ${loserPay} to ${loser.name}, ${winnerPay} to ${winner.name}`,
       );
@@ -215,9 +223,13 @@ function maskState(state: EngineState | null, viewerMemberId: string | null) {
     log: state.log.slice(-12),
     result: state.result,
     seats: state.seats.map((s) => {
-      const show =
-        state.street === "showdown" ||
-        (viewerMemberId && s.memberId === viewerMemberId);
+      const isSelf = Boolean(viewerMemberId && s.memberId === viewerMemberId);
+      const showdownShow =
+        state.street === "showdown" &&
+        !s.folded &&
+        s.hole.length > 0 &&
+        Boolean(state.result);
+      const show = isSelf || showdownShow;
       return {
         seat: s.seat,
         memberId: maskMemberId(s.memberId, viewerMemberId),
@@ -234,7 +246,11 @@ function maskState(state: EngineState | null, viewerMemberId: string | null) {
   };
 }
 
-export async function getTableView(tableId: string, viewerMemberId: string | null) {
+export async function getTableView(
+  tableId: string,
+  viewerMemberId: string | null,
+  opts: { advance?: boolean } = {},
+) {
   await ensureClubSeeded();
   let tournament = await getTournamentByTable(tableId);
   const finished = tournament?.status === "finished";
@@ -253,18 +269,28 @@ export async function getTableView(tableId: string, viewerMemberId: string | nul
     seats = await getSeats(tableId);
   }
   let runtime = await readRuntime(tableId);
+  const viewerSeated = Boolean(
+    viewerMemberId && seats.some((s) => s.member_id === viewerMemberId),
+  );
+  // Only seated players (or explicit admin advance) may drive bots / next hand / MTT finish.
+  const canAdvance = Boolean(opts.advance) || viewerSeated;
 
-  if (table.status === "open" && tournament?.status === "running") {
+  if (canAdvance && table.status === "open" && tournament?.status === "running") {
     tournament = (await maybeAdvanceTournamentBlinds(tableId)) ?? tournament;
   }
 
   // auto-run bot actions
-  if (runtime.state && runtime.state.toAct != null && table.status === "open") {
+  if (
+    canAdvance &&
+    runtime.state &&
+    runtime.state.toAct != null &&
+    table.status === "open"
+  ) {
     runtime = await maybeRunBots(tableId, runtime);
   }
 
   // auto-start next hand after short showdown pause
-  if (table.status === "open") {
+  if (canAdvance && table.status === "open") {
     if (
       runtime.state &&
       runtime.state.street === "showdown" &&
@@ -544,20 +570,36 @@ export async function leaveTable(tableId: string, memberId: string) {
     throw new Error("Wait for the hand to finish");
   }
   const table = await getTable(tableId);
-  const [seat] = await sql<SeatRow>(
-    `select * from table_seats where table_id = $1 and member_id = $2`,
+  // Capture pre-clear stack/is_bot — RETURNING * after SET would always be 0/false.
+  const claimed = await sql<{
+    stack: string | number;
+    is_bot: boolean;
+    seat_no: number;
+  }>(
+    `with old as (
+       select table_id, seat_no, member_id, stack, is_bot
+       from table_seats
+       where table_id = $1 and member_id = $2
+     ),
+     upd as (
+       update table_seats t
+       set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
+       from old
+       where t.table_id = old.table_id
+         and t.seat_no = old.seat_no
+         and t.member_id = old.member_id
+       returning t.seat_no
+     )
+     select old.stack, old.is_bot, old.seat_no
+     from old
+     join upd on upd.seat_no = old.seat_no`,
     [tableId, memberId],
   );
-  if (!seat) throw new Error("Not seated");
+  if (!claimed.length) throw new Error("Not seated");
+  const seat = claimed[0]!;
   const stack = num(seat.stack);
   const wasBot = seat.is_bot;
   const isTournament = table.format === "tournament";
-  await sql(
-    `update table_seats
-     set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
-     where table_id = $1 and seat_no = $2`,
-    [tableId, seat.seat_no],
-  );
   // Tournament chips are not club chips — leaving forfeits the stack.
   if (!isTournament && !wasBot && stack > 0) {
     await sendChips(memberId, stack, `table_cashout:${tableId}`);
@@ -565,7 +607,7 @@ export async function leaveTable(tableId: string, memberId: string) {
   if (isTournament) {
     await maybeFinishTournament(tableId);
   }
-  return getTableView(tableId, wasBot ? null : memberId);
+  return getTableView(tableId, wasBot ? null : memberId, { advance: true });
 }
 
 export async function addBot(tableId: string, seatNo?: number) {
@@ -596,13 +638,18 @@ export async function addBot(tableId: string, seatNo?: number) {
      values ($1, $2, $3, 'bot', 0)`,
     [botId, DEFAULT_CLUB_ID, botName],
   );
-  await sql(
+  const claimed = await sql(
     `update table_seats
      set member_id = $1, display_name = $2, stack = $3, is_bot = true, sitting_out = false
-     where table_id = $4 and seat_no = $5`,
+     where table_id = $4 and seat_no = $5 and member_id is null
+     returning seat_no`,
     [botId, botName, buyIn, tableId, seat.seat_no],
   );
-  return getTableView(tableId, null);
+  if (!claimed.length) {
+    await sql(`delete from members where id = $1`, [botId]);
+    throw new Error("Seat not free");
+  }
+  return getTableView(tableId, null, { advance: true });
 }
 
 export async function playerAction(

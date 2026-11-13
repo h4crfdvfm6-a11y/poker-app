@@ -2,7 +2,7 @@ import {
   getBbjp,
   getOverview,
   listMyTournamentIds,
-  listTables,
+  listPublicTables,
   listTournaments,
 } from "@/lib/club";
 import { getPlayerId } from "@/lib/session";
@@ -10,7 +10,7 @@ import { sql } from "@/lib/db";
 
 export async function GET() {
   const overview = await getOverview();
-  const tables = (await listTables()).filter((t) => t.status === "open");
+  const tables = (await listPublicTables()).filter((t) => t.status === "open");
   const tournaments = (await listTournaments()).filter((t) =>
     ["scheduled", "running"].includes(t.status),
   );
@@ -27,7 +27,10 @@ export async function GET() {
     myTournamentIds = await listMyTournamentIds(playerId);
   }
   return Response.json({
-    club: overview.club,
+    club: {
+      name: overview.club.name,
+      // Invite is typed by the player — do not publish it on the anonymous lobby.
+    },
     tables,
     tournaments,
     bbjp: {
