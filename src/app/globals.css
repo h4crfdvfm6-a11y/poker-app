@@ -3,16 +3,18 @@
 @tailwind utilities;
 
 :root {
-  --bg0: #06110c;
-  --bg1: #0c1c14;
-  --panel: #12261c;
-  --line: rgba(240, 214, 140, 0.18);
+  /* Pantone 181 C ≈ #5C1A1B — deep burgundy field */
+  --burgundy: #5c1a1b;
+  --bg0: #3a0f10;
+  --bg1: #5c1a1b;
+  --panel: #4a1516;
+  --line: rgba(240, 214, 140, 0.2);
   --gold: #e7c56a;
   --gold-strong: #f0d68c;
   --felt: #1f6b45;
   --ink: #f4efe3;
-  --muted: #a9b8ae;
-  --danger: #c4474a;
+  --muted: #c4b0b1;
+  --danger: #e07074;
   --ok: #5dca86;
 }
 
@@ -26,7 +28,7 @@ body {
   min-height: 100%;
   color: var(--ink);
   background:
-    radial-gradient(ellipse at 50% -10%, #1a3d2b 0%, transparent 55%),
+    radial-gradient(ellipse at 50% -10%, #7a2a2c 0%, transparent 55%),
     linear-gradient(180deg, var(--bg1), var(--bg0));
   font-family: var(--font-body), sans-serif;
 }
