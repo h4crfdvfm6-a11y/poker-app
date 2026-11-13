@@ -117,16 +117,16 @@ export default function LobbyPage() {
         </Link>
       </div>
 
-      <div className="panel mb-4 flex items-center justify-between px-4 py-3">
+      <div className="bbjp-panel mb-4 flex items-center justify-between px-4 py-3">
         <div>
-          <div className="text-xs uppercase tracking-wider text-[var(--muted)]">
+          <div className="bbjp-label text-xs uppercase tracking-wider">
             Bad Beat Jackpot
           </div>
-          <div className="brand text-2xl text-[var(--gold-strong)]">
+          <div className="brand bbjp-amount text-2xl">
             {money(data.bbjp.balance)}
           </div>
         </div>
-        <div className="text-right text-xs text-[var(--muted)]">
+        <div className="bbjp-meta text-right text-xs">
           <div>{data.bbjp.enabled ? "Live" : "Off"}</div>
           <div>Trigger {data.bbjp.trigger_hand}</div>
         </div>
