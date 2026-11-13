@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 
 const ADMIN_COOKIE = "fa_admin";
 const PLAYER_COOKIE = "fa_player";
-const ADMIN_TTL_SEC = 60 * 60 * 24 * 14;
+const ADMIN_TTL_SEC = 60 * 60 * 8; // 8 hours — shorter than a long-lived club session
 const PLAYER_TTL_SEC = 60 * 60 * 24 * 30;
 
 /** Process-local fallback only — never a shipped constant. */
@@ -25,6 +25,7 @@ export function adminPinOk(pin: string): boolean {
 function sessionSecret(): string {
   const fromEnv = process.env.SESSION_SECRET?.trim();
   if (fromEnv) return fromEnv;
+  // Ephemeral per process until SESSION_SECRET is bound in Cursor secrets.
   ephemeralSessionSecret ??= randomBytes(32).toString("hex");
   return ephemeralSessionSecret;
 }
