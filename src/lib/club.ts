@@ -574,9 +574,12 @@ export async function joinByInvite(inviteCode: string, displayName: string) {
     }
 
     const memberId = id("mem");
+    await q(
+      `alter table members add column if not exists gem_balance integer not null default 0`,
+    );
     const inserted = await q<Member>(
-      `insert into members (id, club_id, display_name, role, chip_balance)
-       values ($1, $2, $3, 'player', $4)
+      `insert into members (id, club_id, display_name, role, chip_balance, gem_balance)
+       values ($1, $2, $3, 'player', $4, 100)
        returning *`,
       [memberId, club.id, displayName.trim(), WELCOME_CHIPS],
     );

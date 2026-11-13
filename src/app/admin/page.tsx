@@ -196,6 +196,25 @@ export default function AdminPage() {
     await refresh();
   }
 
+  async function sendGems(e: FormEvent) {
+    e.preventDefault();
+    setError("");
+    const res = await fetch("/api/admin/gems", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        memberId: sendMemberId,
+        amount: Number(sendAmount),
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setError(json.error || "Could not send gems");
+      return;
+    }
+    await refresh();
+  }
+
   async function openTable(e: FormEvent) {
     e.preventDefault();
     setError("");
@@ -450,7 +469,7 @@ export default function AdminPage() {
           </form>
 
           <form onSubmit={sendChips} className="panel grid gap-3 p-4">
-            <h2 className="brand text-xl">Send chips</h2>
+            <h2 className="brand text-xl">Send chips / gems</h2>
             <div>
               <label className="label">Player</label>
               <select
@@ -475,9 +494,14 @@ export default function AdminPage() {
                 required
               />
             </div>
-            <button className="btn btn-gold" type="submit">
-              Send / recall chips
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button className="btn btn-gold" type="submit">
+                Chips
+              </button>
+              <button className="btn btn-ghost" type="button" onClick={sendGems}>
+                Gems
+              </button>
+            </div>
           </form>
 
           <div className="grid gap-2">

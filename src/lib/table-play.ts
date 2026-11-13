@@ -13,7 +13,6 @@ import {
 } from "./club";
 import {
   applyAction,
-  botDecision,
   nextButton,
   potLimitMaxTo,
   publicPot,
@@ -22,12 +21,15 @@ import {
   type ActionType,
   type EngineState,
 } from "./poker/engine";
+import { botThinkMs, decideBotAction, styleForBot } from "./poker/bots";
+import { describeMadeHand } from "./poker/hand-display";
 import {
   isAllInOrFold,
   isGameType,
   isPotLimit,
   type GameType,
 } from "./poker/variants";
+import { getMemberCosmetics } from "./shop";
 import { cardId } from "./poker/cards";
 import {
   getTournamentByTable,
@@ -360,6 +362,23 @@ export async function getTableView(
       ? legalActions(runtime.state, mySeat.seat)
       : { actions: [], sizing: null };
   const myTableSeat = seats.find((s) => s.member_id === viewerMemberId);
+  const gameType = (isGameType(refreshed.game_type)
+    ? refreshed.game_type
+    : "NLH") as GameType;
+  const masked = maskState(runtime.state, viewerMemberId);
+  const myLive = masked?.seats.find((s) => s.memberId === viewerMemberId);
+  const handStrength =
+    myLive && myLive.hole.length && !myLive.hole.includes("xx")
+      ? describeMadeHand(myLive.hole, masked?.board ?? [], gameType)
+      : null;
+  let cosmetics: Awaited<ReturnType<typeof getMemberCosmetics>> | null = null;
+  if (viewerMemberId) {
+    try {
+      cosmetics = await getMemberCosmetics(viewerMemberId);
+    } catch {
+      cosmetics = null;
+    }
+  }
 
   return {
     meMemberId: viewerMemberId,
@@ -399,7 +418,15 @@ export async function getTableView(
       sittingOut: s.sitting_out,
       empty: !s.member_id,
     })),
-    hand: maskState(runtime.state, viewerMemberId),
+    hand: masked,
+    handStrength,
+    cosmetics: cosmetics
+      ? {
+          avatar: cosmetics.equipped_avatar,
+          felt: cosmetics.equipped_felt,
+          cardBack: cosmetics.equipped_card_back,
+        }
+      : null,
     actions: legal.actions,
     sizing: legal.sizing,
     phase: runtime.phase,
@@ -424,7 +451,10 @@ async function maybeRunBots(
     if (!state || state.toAct == null || state.street === "showdown") break;
     const actor = state.seats.find((s) => s.seat === state.toAct);
     if (!actor?.isBot) break;
-    const decision = botDecision(state, actor.seat);
+    // Natural delay so bots don't snap-act; personality drives timing.
+    const delay = Math.min(botThinkMs(styleForBot(actor.memberId)), 400);
+    await new Promise((r) => setTimeout(r, delay));
+    const decision = decideBotAction(state, actor.seat);
     const next = applyAction(state, actor.seat, decision.type, decision.amount ?? 0);
     if (next.street === "showdown") {
       await applyHandEconomy(tableId, next);

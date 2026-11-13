@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  playSound,
+  setSoundsMuted,
+  soundForAction,
+  soundsMuted,
+} from "@/lib/sounds";
+import { CARD_BACK_STYLES, FELT_STYLES } from "@/lib/shop";
 
 type TableView = {
   meMemberId: string | null;
@@ -66,6 +73,12 @@ type TableView = {
       hole: string[];
     }>;
   };
+  handStrength?: null | {
+    label: string;
+    premium: string | null;
+    intensity: number;
+  };
+  cosmetics?: null | { avatar: string; felt: string; cardBack: string };
   actions: Array<{ type: string; label: string; amount?: number }>;
   sizing: null | {
     kind: "bet" | "raise";
@@ -102,17 +115,30 @@ function suitColor(card: string) {
   return s === "h" || s === "d" ? "text-[#ff6b6b]" : "text-[var(--ink)]";
 }
 
-function CardPipe({ card }: { card: string }) {
+function CardPipe({
+  card,
+  premium,
+  cardBack = "back_navy",
+}: {
+  card: string;
+  premium?: boolean;
+  cardBack?: string;
+}) {
   if (card === "xx") {
     return (
-      <div className="flex h-14 w-10 items-center justify-center rounded-md border border-[var(--line)] bg-[#1a1030] text-xs text-[var(--muted)]">
+      <div
+        className="flex h-14 w-10 items-center justify-center rounded-md border border-[var(--line)] text-xs text-[var(--muted)]"
+        style={{ background: CARD_BACK_STYLES[cardBack] || CARD_BACK_STYLES.back_navy }}
+      >
         ██
       </div>
     );
   }
   return (
     <div
-      className={`flex h-14 w-10 flex-col items-center justify-center rounded-md border border-white/20 bg-[#f7f1e4] font-bold ${suitColor(card)}`}
+      className={`flex h-14 w-10 flex-col items-center justify-center rounded-md border border-white/20 bg-[#f7f1e4] font-bold ${suitColor(card)} ${
+        premium ? "premium-glow" : ""
+      }`}
     >
       <span className="text-lg leading-none">{card[0]}</span>
       <span className="text-sm leading-none">
@@ -130,6 +156,23 @@ export default function TablePage() {
   const [buyIn, setBuyIn] = useState("");
   const [raiseTo, setRaiseTo] = useState("");
   const [busy, setBusy] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [emojis, setEmojis] = useState<string[]>([
+    "😂",
+    "😎",
+    "🔥",
+    "😱",
+    "👏",
+    "❤️",
+    "😭",
+    "🤔",
+    "🎉",
+  ]);
+  const [reactions, setReactions] = useState<
+    Array<{ id: string; seat: number; emoji: string }>
+  >([]);
+  const lastPremium = useRef<string | null>(null);
+  const lastHandNo = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/table/${tableId}`, { cache: "no-store" });
@@ -152,10 +195,40 @@ export default function TablePage() {
   }, [tableId, buyIn]);
 
   useEffect(() => {
+    setMuted(soundsMuted());
     void load();
     const t = setInterval(() => void load(), 1200);
-    return () => clearInterval(t);
-  }, [load]);
+    const r = setInterval(() => {
+      void fetch(`/api/table/${tableId}/react`)
+        .then((res) => res.json())
+        .then((json) => {
+          if (json.reactions) setReactions(json.reactions);
+          if (json.emojis) setEmojis(json.emojis);
+        })
+        .catch(() => undefined);
+    }, 900);
+    return () => {
+      clearInterval(t);
+      clearInterval(r);
+    };
+  }, [load, tableId]);
+
+  useEffect(() => {
+    if (!view?.handStrength?.premium) return;
+    const key = `${view.hand?.handNo}-${view.handStrength.premium}`;
+    if (lastPremium.current === key) return;
+    lastPremium.current = key;
+    playSound("premium");
+  }, [view?.handStrength, view?.hand?.handNo]);
+
+  useEffect(() => {
+    const handNo = view?.hand?.handNo ?? null;
+    if (handNo != null && lastHandNo.current !== handNo) {
+      if (lastHandNo.current != null) playSound("deal");
+      lastHandNo.current = handNo;
+    }
+    if (view?.hand?.result) playSound("win");
+  }, [view?.hand?.handNo, view?.hand?.result]);
 
   const seated = view?.meSeat != null;
 
@@ -192,6 +265,7 @@ export default function TablePage() {
   async function act(type: string, amount?: number) {
     setBusy(true);
     setError("");
+    playSound(soundForAction(type));
     const res = await fetch(`/api/table/${tableId}/action`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -204,6 +278,22 @@ export default function TablePage() {
       return;
     }
     setView(json);
+  }
+
+  async function react(emoji: string) {
+    playSound("react");
+    const res = await fetch(`/api/table/${tableId}/react`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ emoji }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setError(json.error || "Reaction failed");
+      return;
+    }
+    setReactions(json.reactions || []);
+    if (json.emojis) setEmojis(json.emojis);
   }
 
   async function addBot() {
@@ -291,12 +381,28 @@ export default function TablePage() {
 
       {error ? <p className="mb-2 text-sm text-[#ffb4b6]">{error}</p> : null}
 
+      {view.handStrength ? (
+        <div
+          className={`mb-2 rounded-xl border border-[var(--line)] px-3 py-2 text-center ${
+            view.handStrength.intensity > 0.5 ? "premium-banner" : "bg-black/25"
+          }`}
+        >
+          <div className="text-xs uppercase tracking-wider text-[var(--muted)]">
+            Your hand
+          </div>
+          <div className="brand text-lg text-[var(--gold-strong)]">
+            {view.handStrength.label}
+          </div>
+        </div>
+      ) : null}
+
       <div className="panel relative mb-3 h-[420px] overflow-hidden p-2">
         <div
           className="absolute inset-4 rounded-[40%] border border-[rgba(240,214,140,.2)]"
           style={{
             background:
-              "radial-gradient(circle at 50% 40%, #2f8a58 0%, #145834 55%, #0c3a24 100%)",
+              FELT_STYLES[view.cosmetics?.felt || "felt_classic"] ||
+              FELT_STYLES.felt_classic,
           }}
         />
         <div className="absolute left-1/2 top-1/2 z-10 w-[70%] -translate-x-1/2 -translate-y-[58%] text-center">
@@ -319,6 +425,8 @@ export default function TablePage() {
         {view.seats.map((seat) => {
           const live = handSeats.find((s) => s.seat === seat.seat);
           const active = view.hand?.toAct === seat.seat;
+          const rx = reactions.find((r) => r.seat === seat.seat);
+          const mine = view.meSeat === seat.seat;
           return (
             <div
               key={seat.seat}
@@ -335,6 +443,7 @@ export default function TablePage() {
               >
                 <div className="truncate text-xs font-semibold">
                   {seat.empty ? `Seat ${seat.seat + 1}` : seat.name}
+                  {seat.isBot ? " · AI" : ""}
                 </div>
                 <div className="text-[11px] text-[var(--muted)]">
                   {seat.empty
@@ -349,17 +458,53 @@ export default function TablePage() {
                 {live?.hole?.length ? (
                   <div className="mt-1 flex gap-1">
                     {live.hole.map((c, i) => (
-                      <div key={i} className="scale-75 origin-left">
-                        <CardPipe card={c} />
+                      <div key={i} className="origin-left scale-75">
+                        <CardPipe
+                          card={c}
+                          premium={Boolean(mine && view.handStrength?.premium)}
+                          cardBack={view.cosmetics?.cardBack}
+                        />
                       </div>
                     ))}
                   </div>
                 ) : null}
               </button>
+              {rx ? (
+                <div className="reaction-float pointer-events-none absolute -top-3 left-1/2 -translate-x-1/2 text-2xl">
+                  {rx.emoji}
+                </div>
+              ) : null}
             </div>
           );
         })}
       </div>
+
+      {seated ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          {emojis.map((e) => (
+            <button
+              key={e}
+              type="button"
+              className="btn btn-ghost !px-2 !py-1 !text-lg"
+              disabled={busy}
+              onClick={() => react(e)}
+            >
+              {e}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="btn btn-ghost !py-1 !text-xs"
+            onClick={() => {
+              const next = !muted;
+              setMuted(next);
+              setSoundsMuted(next);
+            }}
+          >
+            {muted ? "Unmute" : "Mute"}
+          </button>
+        </div>
+      ) : null}
 
       {!isTournament ? (
         <div className="mb-3 flex flex-wrap gap-2">

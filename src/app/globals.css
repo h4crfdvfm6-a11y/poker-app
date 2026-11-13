@@ -148,3 +148,45 @@ a {
 .bbjp-text {
   color: var(--ok);
 }
+
+.premium-glow {
+  box-shadow: 0 0 0 1px rgba(231, 197, 106, 0.55), 0 0 18px rgba(231, 197, 106, 0.45);
+  animation: premium-pulse 1.4s ease-in-out infinite;
+}
+
+.premium-banner {
+  background: radial-gradient(
+    ellipse at 50% 0%,
+    rgba(231, 197, 106, 0.22),
+    transparent 70%
+  );
+  animation: premium-pulse 1.8s ease-in-out infinite;
+}
+
+.reaction-float {
+  animation: react-up 1.4s ease-out forwards;
+}
+
+@keyframes premium-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.12);
+  }
+}
+
+@keyframes react-up {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.8);
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -28px) scale(1.15);
+  }
+}

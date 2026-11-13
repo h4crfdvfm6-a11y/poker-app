@@ -119,9 +119,17 @@ export default function LobbyPage() {
           </Link>
           <p className="mt-1 text-sm text-[var(--muted)]">{data.club.name}</p>
         </div>
-        <Link href="/admin" className="btn btn-ghost !py-2 !text-sm">
-          Admin
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/shop" className="btn btn-ghost !py-2 !text-sm">
+            Shop
+          </Link>
+          <Link href="/coach" className="btn btn-ghost !py-2 !text-sm">
+            Coach
+          </Link>
+          <Link href="/admin" className="btn btn-ghost !py-2 !text-sm">
+            Admin
+          </Link>
+        </div>
       </div>
 
       <div className="bbjp-panel mb-4 flex items-center justify-between px-4 py-3">
