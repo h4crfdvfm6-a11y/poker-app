@@ -396,7 +396,16 @@ export async function createTable(input: {
 export async function closeTable(tableId: string) {
   await ensureClubSeeded();
 
-  // Stop the live hand first so pollers cannot keep writing stacks.
+  // Claim close exactly once so overlapping admin deletes / leave cannot double-pay.
+  const claimed = await sql(
+    `update cash_tables
+     set status = 'closed'
+     where id = $1 and club_id = $2 and status = 'open'
+     returning id`,
+    [tableId, DEFAULT_CLUB_ID],
+  );
+  if (!claimed.length) return;
+
   type RuntimeSeat = {
     memberId?: string;
     stack?: number;
@@ -407,12 +416,20 @@ export async function closeTable(tableId: string) {
     street?: string;
     seats?: RuntimeSeat[];
     pots?: Array<{ amount: number }>;
+    squidCollected?: number;
+    squidPaidOut?: number;
   };
+
+  await sql(
+    `alter table table_runtime
+     add column if not exists squid_json text not null default '{}'`,
+  );
+
   const runtimeRows = await sql<{
     state_json: string;
-    version: number;
+    squid_json: string;
   }>(
-    `select state_json, version from table_runtime where table_id = $1`,
+    `select state_json, squid_json from table_runtime where table_id = $1`,
     [tableId],
   );
   const runtime = runtimeRows[0];
@@ -425,14 +442,16 @@ export async function closeTable(tableId: string) {
     }
   }
 
-  if (state?.seats?.length && state.street && state.street !== "waiting") {
-    // Showdown already paid pots into stacks — only refund stacks.
-    // Mid-hand: refund stack+bet and return unclaimed pots to the float.
-    const atShowdown = state.street === "showdown";
+  const midHand =
+    Boolean(state?.seats?.length) &&
+    Boolean(state?.street) &&
+    state!.street !== "waiting" &&
+    state!.street !== "showdown";
+
+  if (midHand && state?.seats) {
+    // Live pot chips live in runtime — refund stack+bet and return side pots.
     for (const seat of state.seats) {
-      const refund = atShowdown
-        ? Math.max(0, Number(seat.stack || 0))
-        : Math.max(0, Number(seat.stack || 0) + Number(seat.bet || 0));
+      const refund = Math.max(0, Number(seat.stack || 0) + Number(seat.bet || 0));
       if (refund <= 0 || !seat.memberId) continue;
       if (seat.isBot) {
         await creditBotFloat(refund, `bot_table_close:${tableId}`);
@@ -440,23 +459,39 @@ export async function closeTable(tableId: string) {
         await sendChips(seat.memberId, refund, `table_close_cashout:${tableId}`);
       }
     }
-    if (!atShowdown) {
-      const potLeft = (state.pots || []).reduce(
-        (sum, pot) => sum + Math.max(0, Number(pot.amount || 0)),
-        0,
-      );
-      if (potLeft > 0) {
-        await creditBotFloat(potLeft, `table_close_pot:${tableId}`);
-      }
+    const potLeft = (state.pots || []).reduce(
+      (sum, pot) => sum + Math.max(0, Number(pot.amount || 0)),
+      0,
+    );
+    if (potLeft > 0) {
+      await creditBotFloat(potLeft, `table_close_pot:${tableId}`);
     }
+    await sql(
+      `update table_seats
+       set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
+       where table_id = $1`,
+      [tableId],
+    );
   } else {
+    // Waiting / showdown: atomically clear seats so leaveTable cannot double-cash.
     const seated = await sql<{
       member_id: string;
       stack: string | number;
       is_bot: boolean;
     }>(
-      `select member_id, stack, is_bot from table_seats
-       where table_id = $1 and member_id is not null`,
+      `with old as (
+         select table_id, seat_no, member_id, stack, is_bot
+         from table_seats
+         where table_id = $1 and member_id is not null
+       ),
+       upd as (
+         update table_seats t
+         set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
+         from old
+         where t.table_id = old.table_id and t.seat_no = old.seat_no
+         returning old.member_id, old.stack, old.is_bot
+       )
+       select member_id, stack, is_bot from upd`,
       [tableId],
     );
     for (const seat of seated) {
@@ -470,35 +505,26 @@ export async function closeTable(tableId: string) {
     }
   }
 
-  // Return any unfinished squid pot to the club AI float.
-  if (runtime) {
-    try {
-      await sql(
-        `alter table table_runtime
-         add column if not exists squid_json text not null default '{}'`,
-      );
-      const squidRows = await sql<{ squid_json: string }>(
-        `select squid_json from table_runtime where table_id = $1`,
-        [tableId],
-      );
-      const squid = JSON.parse(squidRows[0]?.squid_json || "{}") as {
-        pot?: number;
-      };
-      const pot = Math.max(0, Number(squid.pot || 0));
-      if (pot > 0) {
-        await creditBotFloat(pot, `table_close_squid:${tableId}`);
-      }
-    } catch {
-      /* ignore bad squid_json */
+  // Return unfinished squid pot, minus any amount already paid into stacks.
+  try {
+    const squid = JSON.parse(runtime?.squid_json || "{}") as { pot?: number };
+    const jsonPot = Math.max(0, Number(squid.pot || 0));
+    const paidOut = Math.max(0, Number(state?.squidPaidOut || 0));
+    const unbanked =
+      midHand || state?.street === "showdown"
+        ? Math.max(0, Number(state?.squidCollected || 0))
+        : 0;
+    // Unbanked ante is only owed if it was never written into squid_json.
+    const anteStillLoose =
+      unbanked > 0 && jsonPot === 0 ? unbanked : 0;
+    const squidReturn = Math.max(0, jsonPot + anteStillLoose - paidOut);
+    if (squidReturn > 0) {
+      await creditBotFloat(squidReturn, `table_close_squid:${tableId}`);
     }
+  } catch {
+    /* ignore bad squid_json */
   }
 
-  await sql(
-    `update table_seats
-     set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
-     where table_id = $1`,
-    [tableId],
-  );
   if (runtime) {
     await sql(
       `update table_runtime
@@ -511,10 +537,6 @@ export async function closeTable(tableId: string) {
       [tableId],
     );
   }
-  await sql(
-    "update cash_tables set status = 'closed' where id = $1 and club_id = $2",
-    [tableId, DEFAULT_CLUB_ID],
-  );
 }
 
 export async function listTournaments(clubId = DEFAULT_CLUB_ID) {

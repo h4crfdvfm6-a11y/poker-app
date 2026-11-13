@@ -184,7 +184,10 @@ function awardSquid(
   scores[winner.memberId] = (scores[winner.memberId] || 0) + 1;
   const count = scores[winner.memberId]!;
   if (count >= squid.target && squid.pot > 0) {
-    if (payStacks) winner.stack += squid.pot;
+    if (payStacks) {
+      winner.stack += squid.pot;
+      state.squidPaidOut = (state.squidPaidOut || 0) + squid.pot;
+    }
     state.log.push(
       `${winner.name} wins squid pot ${squid.pot} (${count}/${squid.target})`,
     );
@@ -223,7 +226,11 @@ async function bankSquidAnte(
   });
 }
 
-/** Persist squid scores once per showdown after a successful runtime write. */
+/**
+ * Persist squid scores once per showdown after a successful runtime write.
+ * Credits the pot onto stacks here (after version claim) so closeTable cannot
+ * double-pay stacks + squid_json.pot in the same window.
+ */
 async function settleSquidShowdown(
   tableId: string,
   state: EngineState,
@@ -232,38 +239,23 @@ async function settleSquidShowdown(
   if (!table.squid_enabled || table.format === "tournament") return;
   if (state.street !== "showdown" || !state.result) return;
   if (!(await claimSquidColumn(tableId, state.handNo, "squid_hand_no"))) return;
-  const squid = await readSquid(tableId, Number(table.squid_target || 3));
-  // Stacks were already credited before writeRuntime — JSON only here.
-  await writeSquid(tableId, awardSquid(state, squid, false));
-}
-
-/**
- * Apply in-memory squid pot credit before a showdown runtime write.
- * Pass includeUnbankedAnte on the deal write (before ante is banked into squid_json).
- * Later streets must not re-add squidCollected — ante is already in the pot.
- */
-async function applySquidBeforeWrite(
-  tableId: string,
-  state: EngineState,
-  table: TableRow,
-  includeUnbankedAnte = false,
-) {
-  if (
-    !table.squid_enabled ||
-    table.format === "tournament" ||
-    state.street !== "showdown" ||
-    !state.result
-  ) {
-    return;
+  // bankSquidAnte runs first; if it lost a race, fold unbanked ante into the award.
+  let squid = await readSquid(tableId, Number(table.squid_target || 3));
+  const anteRows = await sql<{ squid_ante_hand_no: number }>(
+    `select squid_ante_hand_no from table_runtime where table_id = $1`,
+    [tableId],
+  );
+  const anteBanked = Number(anteRows[0]?.squid_ante_hand_no || 0) === state.handNo;
+  if (!anteBanked && state.squidCollected > 0) {
+    squid = { ...squid, pot: squid.pot + state.squidCollected };
   }
-  const preview = await readSquid(tableId, Number(table.squid_target || 3));
-  const withAnte = {
-    ...preview,
-    pot:
-      preview.pot +
-      (includeUnbankedAnte ? state.squidCollected || 0 : 0),
-  };
-  awardSquid(state, withAnte, true);
+  squid = awardSquid(state, squid, true);
+  await writeSquid(tableId, squid);
+  // Keep showdown state_json stacks in sync with the paid pot.
+  await sql(
+    `update table_runtime set state_json = $2, updated_at = now() where table_id = $1`,
+    [tableId, JSON.stringify(state)],
+  );
 }
 
 async function readRuntime(tableId: string) {
@@ -668,7 +660,6 @@ async function maybeRunBots(
       decision.amount ?? 0,
     );
     const table = await getTable(tableId, true);
-    await applySquidBeforeWrite(tableId, next, table);
     const version = current.version + 1;
     const wrote = await writeRuntime(tableId, {
       phase: next.street === "showdown" ? "showdown" : "hand",
@@ -679,6 +670,7 @@ async function maybeRunBots(
     });
     if (!wrote) break;
     if (next.street === "showdown") {
+      await bankSquidAnte(tableId, next, table);
       await settleSquidShowdown(tableId, next, table);
       await applyHandEconomy(tableId, next);
       await markBustedPlayers(tableId);
@@ -758,8 +750,6 @@ async function beginNextHand(tableId: string) {
       squidAnte: squidEnabled ? num(table.bb) : 0,
     },
   );
-
-  await applySquidBeforeWrite(tableId, state, table, true);
 
   const phase =
     state.street === "waiting"
@@ -984,7 +974,6 @@ export async function playerAction(
 
   let next = applyAction(runtime.state, seat.seat, type, amount);
   const table = await getTable(tableId, true);
-  await applySquidBeforeWrite(tableId, next, table);
   const wrote = await writeRuntime(tableId, {
     phase: next.street === "showdown" ? "showdown" : "hand",
     state: next,
@@ -994,6 +983,7 @@ export async function playerAction(
   });
   if (!wrote) throw new Error("Table updated — try again");
   if (next.street === "showdown") {
+    await bankSquidAnte(tableId, next, table);
     await settleSquidShowdown(tableId, next, table);
     await applyHandEconomy(tableId, next);
     await markBustedPlayers(tableId);

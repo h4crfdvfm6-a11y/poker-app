@@ -77,6 +77,8 @@ export type EngineState = {
   gameType: GameType;
   /** Chips taken for Squid ante this hand (not in the main pot). */
   squidCollected: number;
+  /** Squid pot paid into a winner's stack this hand (avoid closeTable double-pay). */
+  squidPaidOut: number;
 };
 
 function alive(s: EngineSeat) {
@@ -505,6 +507,7 @@ export function startHand(
     endedAt: null,
     gameType,
     squidCollected: 0,
+    squidPaidOut: 0,
   };
 
   const active = seats.filter((s) => !s.sittingOut && s.stack > 0);
@@ -522,25 +525,7 @@ export function startHand(
   }
   state.dealtIn = active.map((s) => s.seat);
 
-  // Squid ante before blinds so all-in / bomb runout still works.
   const squidAnte = Math.max(0, opts.squidAnte || 0);
-  if (squidAnte > 0) {
-    let collected = 0;
-    for (const s of active) {
-      const pay = Math.min(s.stack, squidAnte);
-      if (pay <= 0) continue;
-      s.stack -= pay;
-      if (s.stack <= 0) {
-        s.stack = 0;
-        s.allIn = true;
-      }
-      collected += pay;
-    }
-    state.squidCollected = collected;
-    if (collected > 0) {
-      pushLog(state, `Squid ante ${squidAnte} · pot +${collected}`);
-    }
-  }
 
   if (isBombPot(gameType)) {
     // Everyone antes 1 BB; no preflop betting — start on the flop.
@@ -558,6 +543,7 @@ export function startHand(
       state,
       `Hand #${opts.handNo} · BOMB — ante ${ante}, flop ${state.board.map(cardId).join(" ")}`,
     );
+    takeSquidAnte(state, squidAnte);
     // Short stacks that shoved the ante: run out turn/river immediately.
     if (!state.seats.some(canAct)) {
       runOutBoardToShowdown(state);
@@ -573,6 +559,10 @@ export function startHand(
     ? state.button
     : nextSeat(state, state.button, (s) => !s.sittingOut && s.stack > 0)!;
   const bbSeat = nextSeat(state, sbSeat, (s) => !s.sittingOut && s.stack > 0)!;
+  if (sbSeat == null || bbSeat == null) {
+    state.street = "waiting";
+    return state;
+  }
 
   const sbPlayer = state.seats.find((s) => s.seat === sbSeat)!;
   const bbPlayer = state.seats.find((s) => s.seat === bbSeat)!;
@@ -581,6 +571,14 @@ export function startHand(
   state.currentBet = Math.max(sbPlayer.bet, bbPlayer.bet);
   state.minRaise = opts.bb;
 
+  takeSquidAnte(state, squidAnte);
+
+  if (!state.seats.some(canAct)) {
+    // Everyone all-in after blinds + squid — run it out.
+    advanceStreet(state);
+    return state;
+  }
+
   state.toAct = nextSeat(state, bbSeat, canAct);
   state.acted = [];
   pushLog(
@@ -588,6 +586,28 @@ export function startHand(
     `Hand #${opts.handNo} · ${gameType} — SB ${sbPlayer.name}, BB ${bbPlayer.name}`,
   );
   return state;
+}
+
+/** Squid ante after blinds/bomb so short stacks still post into the main pot. */
+function takeSquidAnte(state: EngineState, ante: number) {
+  if (ante <= 0) return;
+  let collected = 0;
+  for (const s of state.seats) {
+    if (!s.hole.length || s.sittingOut || s.folded) continue;
+    if (s.stack <= 0) continue; // already all-in on blinds/bomb
+    const pay = Math.min(s.stack, ante);
+    if (pay <= 0) continue;
+    s.stack -= pay;
+    if (s.stack <= 0) {
+      s.stack = 0;
+      s.allIn = true;
+    }
+    collected += pay;
+  }
+  state.squidCollected = collected;
+  if (collected > 0) {
+    pushLog(state, `Squid ante ${ante} · pot +${collected}`);
+  }
 }
 
 /** Pot-limit: max total bet-to = seat.bet + toCall + (pot including toCall). */
