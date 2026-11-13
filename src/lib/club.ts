@@ -426,8 +426,13 @@ export async function closeTable(tableId: string) {
   }
 
   if (state?.seats?.length && state.street && state.street !== "waiting") {
+    // Showdown already paid pots into stacks — only refund stacks.
+    // Mid-hand: refund stack+bet and return unclaimed pots to the float.
+    const atShowdown = state.street === "showdown";
     for (const seat of state.seats) {
-      const refund = Math.max(0, Number(seat.stack || 0) + Number(seat.bet || 0));
+      const refund = atShowdown
+        ? Math.max(0, Number(seat.stack || 0))
+        : Math.max(0, Number(seat.stack || 0) + Number(seat.bet || 0));
       if (refund <= 0 || !seat.memberId) continue;
       if (seat.isBot) {
         await creditBotFloat(refund, `bot_table_close:${tableId}`);
@@ -435,12 +440,14 @@ export async function closeTable(tableId: string) {
         await sendChips(seat.memberId, refund, `table_close_cashout:${tableId}`);
       }
     }
-    const potLeft = (state.pots || []).reduce(
-      (sum, pot) => sum + Math.max(0, Number(pot.amount || 0)),
-      0,
-    );
-    if (potLeft > 0) {
-      await creditBotFloat(potLeft, `table_close_pot:${tableId}`);
+    if (!atShowdown) {
+      const potLeft = (state.pots || []).reduce(
+        (sum, pot) => sum + Math.max(0, Number(pot.amount || 0)),
+        0,
+      );
+      if (potLeft > 0) {
+        await creditBotFloat(potLeft, `table_close_pot:${tableId}`);
+      }
     }
   } else {
     const seated = await sql<{

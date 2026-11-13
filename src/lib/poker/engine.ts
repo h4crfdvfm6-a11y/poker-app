@@ -75,6 +75,8 @@ export type EngineState = {
   dealtIn: number[];
   endedAt: number | null;
   gameType: GameType;
+  /** Chips taken for Squid ante this hand (not in the main pot). */
+  squidCollected: number;
 };
 
 function alive(s: EngineSeat) {
@@ -458,6 +460,8 @@ export function startHand(
     bbjpEnabled: boolean;
     bbjpTrigger: string;
     gameType?: GameType;
+    /** Optional Squid ante taken before blinds / bomb ante. */
+    squidAnte?: number;
   },
 ): EngineState {
   const gameType: GameType = opts.gameType ?? "NLH";
@@ -500,6 +504,7 @@ export function startHand(
     dealtIn: [],
     endedAt: null,
     gameType,
+    squidCollected: 0,
   };
 
   const active = seats.filter((s) => !s.sittingOut && s.stack > 0);
@@ -516,6 +521,26 @@ export function startHand(
     }
   }
   state.dealtIn = active.map((s) => s.seat);
+
+  // Squid ante before blinds so all-in / bomb runout still works.
+  const squidAnte = Math.max(0, opts.squidAnte || 0);
+  if (squidAnte > 0) {
+    let collected = 0;
+    for (const s of active) {
+      const pay = Math.min(s.stack, squidAnte);
+      if (pay <= 0) continue;
+      s.stack -= pay;
+      if (s.stack <= 0) {
+        s.stack = 0;
+        s.allIn = true;
+      }
+      collected += pay;
+    }
+    state.squidCollected = collected;
+    if (collected > 0) {
+      pushLog(state, `Squid ante ${squidAnte} · pot +${collected}`);
+    }
+  }
 
   if (isBombPot(gameType)) {
     // Everyone antes 1 BB; no preflop betting — start on the flop.
