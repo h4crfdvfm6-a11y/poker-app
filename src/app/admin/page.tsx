@@ -718,14 +718,14 @@ export default function AdminPage() {
 
       {tab === "bbjp" && bbjp ? (
         <section className="grid gap-4">
-          <div className="panel p-4">
-            <div className="text-xs uppercase tracking-wider text-[var(--muted)]">
+          <div className="bbjp-panel p-4">
+            <div className="bbjp-label text-xs uppercase tracking-wider">
               Jackpot pool
             </div>
-            <div className="brand text-4xl text-[var(--gold-strong)]">
+            <div className="brand bbjp-amount text-4xl">
               {money(bbjp.balance)}
             </div>
-            <p className="mt-2 text-sm text-[var(--muted)]">
+            <p className="bbjp-meta mt-2 text-sm">
               {bbjp.enabled ? "Enabled" : "Disabled"} · trigger {bbjp.trigger_hand}
             </p>
             <div className="mt-4 flex gap-2">
