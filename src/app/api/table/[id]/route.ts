@@ -1,5 +1,5 @@
 import { getTableView } from "@/lib/table-play";
-import { getPlayerId } from "@/lib/session";
+import { getPlayerId, isAdmin } from "@/lib/session";
 
 export async function GET(
   _request: Request,
@@ -8,7 +8,10 @@ export async function GET(
   const { id } = await ctx.params;
   try {
     const playerId = await getPlayerId();
-    return Response.json(await getTableView(id, playerId));
+    const admin = await isAdmin();
+    return Response.json(
+      await getTableView(id, playerId, { advance: admin }),
+    );
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "Failed" },
