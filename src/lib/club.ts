@@ -78,12 +78,8 @@ export async function ensureClubSeeded() {
     [DEFAULT_CLUB_ID],
   );
   if (existing.length) {
+    // Ensure schema only — never refill bot_float (that would mint chips).
     await ensureBotFloatColumn();
-    await sql(
-      `update club_rake set bot_float = greatest(bot_float, 250000)
-       where club_id = $1 and bot_float < 250000`,
-      [DEFAULT_CLUB_ID],
-    );
     return;
   }
 
@@ -347,6 +343,10 @@ export async function createTable(input: {
   const gameType: GameType = isGameType(input.gameType ?? "NLH")
     ? (input.gameType as GameType)
     : "NLH";
+  // Leave room for 5 board + burns: PLO6 needs ≤7 seats on a 52-card deck.
+  const maxSeats =
+    gameType === "PLO6" ? 6 : gameType === "PLO5" ? 7 : gameType === "SHORT_DECK" ? 6 : 9;
+  const seats = Math.max(2, Math.min(maxSeats, Math.floor(input.seats) || 6));
   const tableId = id("tbl");
   const title =
     input.title.trim() || `${gameTypeLabel(gameType)} ${input.sb}/${input.bb}`;
@@ -362,7 +362,7 @@ export async function createTable(input: {
       gameType,
       input.sb,
       input.bb,
-      input.seats,
+      seats,
       input.buyinMin,
       input.buyinMax,
       input.rakePercent,
@@ -378,6 +378,27 @@ export async function createTable(input: {
 }
 
 export async function closeTable(tableId: string) {
+  // Return remaining AI stacks to the club float before closing.
+  const bots = await sql<{
+    member_id: string;
+    stack: string | number;
+  }>(
+    `select member_id, stack from table_seats
+     where table_id = $1 and is_bot = true and member_id is not null`,
+    [tableId],
+  );
+  for (const bot of bots) {
+    const stack = num(bot.stack);
+    if (stack > 0) {
+      await creditBotFloat(stack, `bot_table_close:${tableId}`);
+    }
+  }
+  await sql(
+    `update table_seats
+     set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
+     where table_id = $1 and is_bot = true`,
+    [tableId],
+  );
   await sql(
     "update cash_tables set status = 'closed' where id = $1 and club_id = $2",
     [tableId, DEFAULT_CLUB_ID],

@@ -36,6 +36,13 @@ export async function recordThrottleFailure(
 ): Promise<{ locked: boolean; retryAfterSec: number }> {
   await ensureTable();
   return withTransaction(async (q) => {
+    // Ensure a row exists first so FOR UPDATE serializes concurrent first hits.
+    await q(
+      `insert into security_throttle (key, failures, window_started, locked_until)
+       values ($1, 0, now(), null)
+       on conflict (key) do nothing`,
+      [key],
+    );
     const rows = await q<{
       failures: number;
       window_started: string;
@@ -46,28 +53,20 @@ export async function recordThrottleFailure(
       [key],
     );
     const now = Date.now();
-    let failures = 0;
-    let windowStarted = now;
-    let lockedUntil = 0;
-
-    if (rows[0]) {
-      lockedUntil = rows[0].locked_until
-        ? new Date(rows[0].locked_until).getTime()
-        : 0;
-      if (lockedUntil > now) {
-        return {
-          locked: true,
-          retryAfterSec: Math.ceil((lockedUntil - now) / 1000),
-        };
-      }
-      windowStarted = new Date(rows[0].window_started).getTime();
-      failures = rows[0].failures;
-      if (now - windowStarted > WINDOW_MS) {
-        failures = 0;
-        windowStarted = now;
-      }
+    const row = rows[0]!;
+    let lockedUntil = row.locked_until ? new Date(row.locked_until).getTime() : 0;
+    if (lockedUntil > now) {
+      return {
+        locked: true,
+        retryAfterSec: Math.ceil((lockedUntil - now) / 1000),
+      };
     }
-
+    let windowStarted = new Date(row.window_started).getTime();
+    let failures = row.failures;
+    if (now - windowStarted > WINDOW_MS) {
+      failures = 0;
+      windowStarted = now;
+    }
     failures += 1;
     let locked = false;
     let retryAfterSec = 0;
@@ -76,14 +75,12 @@ export async function recordThrottleFailure(
       locked = true;
       retryAfterSec = Math.ceil(LOCKOUT_MS / 1000);
     }
-
     await q(
-      `insert into security_throttle (key, failures, window_started, locked_until)
-       values ($1, $2, $3::timestamptz, $4::timestamptz)
-       on conflict (key) do update set
-         failures = excluded.failures,
-         window_started = excluded.window_started,
-         locked_until = excluded.locked_until`,
+      `update security_throttle
+       set failures = $2,
+           window_started = $3::timestamptz,
+           locked_until = $4::timestamptz
+       where key = $1`,
       [
         key,
         failures,

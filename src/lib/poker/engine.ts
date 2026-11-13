@@ -583,6 +583,9 @@ export function applyAction(
   if (state.toAct !== seatNo) throw new Error("Not your turn");
   const seat = state.seats.find((s) => s.seat === seatNo);
   if (!seat || !canAct(seat)) throw new Error("Cannot act");
+  if (isAllInOrFold(state.gameType) && type !== "fold" && type !== "allin") {
+    throw new Error("All-in or Fold: only fold or all-in");
+  }
 
   const toCall = Math.max(0, state.currentBet - seat.bet);
 

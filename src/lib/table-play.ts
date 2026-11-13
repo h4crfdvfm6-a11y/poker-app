@@ -742,6 +742,13 @@ export async function playerAction(
   const seat = runtime.state.seats.find((s) => s.memberId === memberId);
   if (!seat) throw new Error("Not at this table");
   if (runtime.state.toAct !== seat.seat) throw new Error("Not your turn");
+  if (
+    isAllInOrFold(runtime.state.gameType) &&
+    type !== "fold" &&
+    type !== "allin"
+  ) {
+    throw new Error("All-in or Fold: only fold or all-in");
+  }
 
   let next = applyAction(runtime.state, seat.seat, type, amount);
   if (next.street === "showdown") {
