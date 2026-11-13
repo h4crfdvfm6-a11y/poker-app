@@ -247,6 +247,65 @@ export function bestOfSevenShortDeck(hole: Card[], board: Card[]): {
   return bestFromCombos(combos, evaluateFiveShortDeck, cmpScoreShortDeck);
 }
 
+function lowRank(r: number): number {
+  return r === 14 ? 1 : r;
+}
+
+/** 8-or-better low: five distinct ranks all ≤8 (A=1). Lower high-card is better. */
+export function evaluateLowEight(cards: Card[]): HandScore | null {
+  if (cards.length !== 5) return null;
+  const lows = cards.map((c) => lowRank(c.r));
+  if (lows.some((r) => r < 1 || r > 8)) return null;
+  if (new Set(lows).size !== 5) return null;
+  return lows.sort((a, b) => b - a);
+}
+
+/** Compare lows: lower ranks win (opposite of high hands). */
+export function cmpLowScore(a: HandScore, b: HandScore): number {
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const av = a[i] ?? 99;
+    const bv = b[i] ?? 99;
+    if (av !== bv) return av < bv ? 1 : -1;
+  }
+  return 0;
+}
+
+export function bestOmahaLow(hole: Card[], board: Card[]): {
+  score: HandScore | null;
+  cards: Card[];
+} {
+  if (hole.length < 2 || board.length < 3) {
+    return { score: null, cards: [...hole, ...board] };
+  }
+  let bestScore: HandScore | null = null;
+  let bestCards: Card[] = [];
+  for (let i = 0; i < hole.length - 1; i++) {
+    for (let j = i + 1; j < hole.length; j++) {
+      for (let a = 0; a < board.length - 2; a++) {
+        for (let b = a + 1; b < board.length - 1; b++) {
+          for (let c = b + 1; c < board.length; c++) {
+            const five = [
+              hole[i]!,
+              hole[j]!,
+              board[a]!,
+              board[b]!,
+              board[c]!,
+            ];
+            const score = evaluateLowEight(five);
+            if (!score) continue;
+            if (!bestScore || cmpLowScore(score, bestScore) > 0) {
+              bestScore = score;
+              bestCards = five;
+            }
+          }
+        }
+      }
+    }
+  }
+  return { score: bestScore, cards: bestCards };
+}
+
 export function bestHand(
   hole: Card[],
   board: Card[],

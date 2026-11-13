@@ -4,9 +4,13 @@ import {
   recordAdminLoginFailure,
   withAdminLoginGate,
 } from "@/lib/admin-login-limit";
+import { assertSameOrigin } from "@/lib/csrf";
 import { adminPinConfigured, adminPinOk, setAdminSession } from "@/lib/session";
 
 export async function POST(request: Request) {
+  const csrf = assertSameOrigin(request);
+  if (csrf) return csrf;
+
   if (!adminPinConfigured()) {
     return Response.json(
       { error: "ADMIN_PIN is not configured on the server" },
@@ -17,7 +21,7 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as { pin?: string };
 
   return withAdminLoginGate(async () => {
-    const blocked = adminLoginBlocked();
+    const blocked = await adminLoginBlocked();
     if (blocked) {
       return Response.json(
         { error: "Too many failed attempts — try again later" },
@@ -29,7 +33,7 @@ export async function POST(request: Request) {
     }
 
     if (!body.pin || !adminPinOk(body.pin)) {
-      const result = recordAdminLoginFailure();
+      const result = await recordAdminLoginFailure();
       if (result.locked) {
         return Response.json(
           { error: "Too many failed attempts — try again later" },
@@ -42,7 +46,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "Wrong admin PIN" }, { status: 401 });
     }
 
-    clearAdminLoginFailures();
+    await clearAdminLoginFailures();
     await setAdminSession();
     return Response.json({ ok: true });
   });

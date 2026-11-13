@@ -2,12 +2,15 @@ import {
   registerForTournament,
   unregisterFromTournament,
 } from "@/lib/club";
+import { assertSameOrigin } from "@/lib/csrf";
 import { getPlayerId } from "@/lib/session";
 
 export async function POST(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  const csrf = assertSameOrigin(request);
+  if (csrf) return csrf;
   const { id } = await ctx.params;
   const playerId = await getPlayerId();
   if (!playerId) {

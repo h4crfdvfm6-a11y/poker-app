@@ -3,6 +3,8 @@ import { id } from "./ids";
 import {
   DEFAULT_CLUB_ID,
   bumpBbjpCollections,
+  creditBotFloat,
+  debitBotFloat,
   ensureClubSeeded,
   getBbjp,
   num,
@@ -20,7 +22,12 @@ import {
   type ActionType,
   type EngineState,
 } from "./poker/engine";
-import { isGameType, isPotLimit, type GameType } from "./poker/variants";
+import {
+  isAllInOrFold,
+  isGameType,
+  isPotLimit,
+  type GameType,
+} from "./poker/variants";
 import { cardId } from "./poker/cards";
 import {
   getTournamentByTable,
@@ -635,6 +642,10 @@ export async function leaveTable(tableId: string, memberId: string) {
   if (!isTournament && !wasBot && stack > 0) {
     await sendChips(memberId, stack, `table_cashout:${tableId}`);
   }
+  // Bot stacks return to the club AI float — never cash out to a player.
+  if (!isTournament && wasBot && stack > 0) {
+    await creditBotFloat(stack, `bot_cashout:${tableId}`);
+  }
   if (isTournament) {
     await maybeFinishTournament(tableId);
   }
@@ -662,23 +673,30 @@ export async function addBot(tableId: string, seatNo?: number) {
   const seat = seatNo != null ? open.find((s) => s.seat_no === seatNo) : open[0];
   if (!seat) throw new Error("Seat not free");
   const buyIn = num(table.buyin_min);
+  // Fund AI stacks from the club bot float so wins cannot mint unbacked chips.
+  await debitBotFloat(buyIn, `bot_buyin:${tableId}`);
   const botId = id("bot");
   const botName = `AI ${seat.seat_no + 1}`;
-  await sql(
-    `insert into members (id, club_id, display_name, role, chip_balance)
-     values ($1, $2, $3, 'bot', 0)`,
-    [botId, DEFAULT_CLUB_ID, botName],
-  );
-  const claimed = await sql(
-    `update table_seats
-     set member_id = $1, display_name = $2, stack = $3, is_bot = true, sitting_out = false
-     where table_id = $4 and seat_no = $5 and member_id is null
-     returning seat_no`,
-    [botId, botName, buyIn, tableId, seat.seat_no],
-  );
-  if (!claimed.length) {
-    await sql(`delete from members where id = $1`, [botId]);
-    throw new Error("Seat not free");
+  try {
+    await sql(
+      `insert into members (id, club_id, display_name, role, chip_balance)
+       values ($1, $2, $3, 'bot', 0)`,
+      [botId, DEFAULT_CLUB_ID, botName],
+    );
+    const claimed = await sql(
+      `update table_seats
+       set member_id = $1, display_name = $2, stack = $3, is_bot = true, sitting_out = false
+       where table_id = $4 and seat_no = $5 and member_id is null
+       returning seat_no`,
+      [botId, botName, buyIn, tableId, seat.seat_no],
+    );
+    if (!claimed.length) {
+      await sql(`delete from members where id = $1`, [botId]);
+      throw new Error("Seat not free");
+    }
+  } catch (error) {
+    await creditBotFloat(buyIn, `bot_buyin_refund:${tableId}`);
+    throw error;
   }
   return getTableView(tableId, null, { advance: true });
 }
@@ -733,6 +751,18 @@ export function legalActions(state: EngineState, seatNo: number): {
   const seat = state.seats.find((s) => s.seat === seatNo);
   if (!seat || state.toAct !== seatNo) return { actions: [], sizing: null };
   const toCall = Math.max(0, state.currentBet - seat.bet);
+
+  if (isAllInOrFold(state.gameType)) {
+    const stackMax = seat.bet + seat.stack;
+    return {
+      actions: [
+        { type: "fold", label: "Fold" },
+        { type: "allin", label: `All-in ${stackMax}`, amount: stackMax },
+      ],
+      sizing: null,
+    };
+  }
+
   const actions: LegalAction[] = [{ type: "fold", label: "Fold" }];
   if (toCall === 0) actions.push({ type: "check", label: "Check" });
   else {

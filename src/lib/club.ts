@@ -74,7 +74,15 @@ export async function ensureClubSeeded() {
     "select id from clubs where id = $1",
     [DEFAULT_CLUB_ID],
   );
-  if (existing.length) return;
+  if (existing.length) {
+    await ensureBotFloatColumn();
+    await sql(
+      `update club_rake set bot_float = greatest(bot_float, 250000)
+       where club_id = $1 and bot_float < 250000`,
+      [DEFAULT_CLUB_ID],
+    );
+    return;
+  }
 
   await sql(
     "insert into clubs (id, name, invite_code) values ($1, $2, $3)",
@@ -86,7 +94,7 @@ export async function ensureClubSeeded() {
     [DEFAULT_CLUB_ID, "AAAKK"],
   );
   await sql(
-    "insert into club_rake (club_id, total_rake) values ($1, 0)",
+    "insert into club_rake (club_id, total_rake, bot_float) values ($1, 0, 250000)",
     [DEFAULT_CLUB_ID],
   );
 
@@ -133,8 +141,9 @@ export async function getOverview(clubId = DEFAULT_CLUB_ID) {
     [clubId],
   );
   const bbjp = await getBbjp(clubId);
-  const [rake] = await sql<{ total_rake: string }>(
-    "select total_rake from club_rake where club_id = $1",
+  await ensureBotFloatColumn();
+  const [rake] = await sql<{ total_rake: string; bot_float: string | number }>(
+    "select total_rake, bot_float from club_rake where club_id = $1",
     [clubId],
   );
   return {
@@ -150,6 +159,7 @@ export async function getOverview(clubId = DEFAULT_CLUB_ID) {
       minimum_hand: bbjp.minimum_hand,
     },
     totalRake: num(rake?.total_rake ?? 0),
+    botFloat: num(rake?.bot_float ?? 0),
   };
 }
 
@@ -180,6 +190,86 @@ export async function addMember(displayName: string, startingChips = 0) {
     memberId,
   ]);
   return member;
+}
+
+const HOUSE_MEMBER_ID = "mem_fa_house";
+
+async function ensureHouseMember() {
+  await sql(
+    `insert into members (id, club_id, display_name, role, chip_balance, status)
+     values ($1, $2, 'Club House', 'system', 0, 'active')
+     on conflict (id) do nothing`,
+    [HOUSE_MEMBER_ID, DEFAULT_CLUB_ID],
+  );
+}
+
+async function ensureBotFloatColumn() {
+  await sql(
+    `alter table club_rake add column if not exists bot_float numeric(14, 2) not null default 0`,
+  );
+}
+
+/** Debit club AI bankroll when seating a bot (prevents unbacked chip minting). */
+export async function debitBotFloat(amount: number, reason: string) {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Bot float debit must be positive");
+  }
+  await ensureClubSeeded();
+  await ensureHouseMember();
+  await ensureBotFloatColumn();
+  const updated = await sql<{ bot_float: string | number }>(
+    `update club_rake
+     set bot_float = bot_float - $1, updated_at = now()
+     where club_id = $2 and bot_float >= $1
+     returning bot_float`,
+    [amount, DEFAULT_CLUB_ID],
+  );
+  if (!updated.length) {
+    throw new Error("Club AI float is empty — ask an admin to top it up");
+  }
+  await sql(
+    `insert into chip_ledger (id, club_id, member_id, amount, reason, created_by)
+     values ($1, $2, $3, $4, $5, 'system')`,
+    [id("led"), DEFAULT_CLUB_ID, HOUSE_MEMBER_ID, -amount, reason],
+  );
+  return num(updated[0]!.bot_float);
+}
+
+/** Return remaining bot stack to the club AI bankroll. */
+export async function creditBotFloat(amount: number, reason: string) {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  await ensureClubSeeded();
+  await ensureHouseMember();
+  await ensureBotFloatColumn();
+  await sql(
+    `update club_rake
+     set bot_float = bot_float + $1, updated_at = now()
+     where club_id = $2`,
+    [amount, DEFAULT_CLUB_ID],
+  );
+  await sql(
+    `insert into chip_ledger (id, club_id, member_id, amount, reason, created_by)
+     values ($1, $2, $3, $4, $5, 'system')`,
+    [id("led"), DEFAULT_CLUB_ID, HOUSE_MEMBER_ID, amount, reason],
+  );
+  return amount;
+}
+
+export async function getBotFloat(clubId = DEFAULT_CLUB_ID) {
+  await ensureClubSeeded();
+  await ensureBotFloatColumn();
+  const rows = await sql<{ bot_float: string | number }>(
+    `select bot_float from club_rake where club_id = $1`,
+    [clubId],
+  );
+  return num(rows[0]?.bot_float ?? 0);
+}
+
+export async function topUpBotFloat(amount: number) {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Amount must be positive");
+  }
+  return creditBotFloat(amount, "bot_float_topup");
 }
 
 export async function sendChips(

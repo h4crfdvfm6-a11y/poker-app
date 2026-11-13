@@ -370,8 +370,13 @@ export default function TablePage() {
             onChange={(e) => setBuyIn(e.target.value)}
             title="Buy-in"
           />
-          <button className="btn btn-ghost !py-2 !text-sm" disabled={busy} onClick={addBot}>
-            Add AI seat
+          <button
+            className="btn btn-ghost !py-2 !text-sm"
+            disabled={busy}
+            onClick={addBot}
+            title="Admin only — AI stacks come from club float"
+          >
+            Add AI seat (admin)
           </button>
           {seated ? (
             <button className="btn btn-danger !py-2 !text-sm" disabled={busy} onClick={leave}>

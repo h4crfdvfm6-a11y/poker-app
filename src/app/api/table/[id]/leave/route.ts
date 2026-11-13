@@ -1,10 +1,13 @@
 import { leaveTable } from "@/lib/table-play";
 import { getPlayerId } from "@/lib/session";
+import { assertSameOrigin } from "@/lib/csrf";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  const csrf = assertSameOrigin(request);
+  if (csrf) return csrf;
   const { id } = await ctx.params;
   const playerId = await getPlayerId();
   if (!playerId) {

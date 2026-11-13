@@ -1,7 +1,9 @@
 import { Card, cardId, freshDeck, shortDeck, shuffle } from "./cards";
 import {
   bestHand,
+  bestOmahaLow,
   cmpHands,
+  cmpLowScore,
   handName,
   meetsBbjpTrigger,
   qualifiesBbjpHoleUse,
@@ -9,6 +11,9 @@ import {
 } from "./eval";
 import {
   holeCardCount,
+  isAllInOrFold,
+  isBombPot,
+  isHiLo,
   isPotLimit,
   type GameType,
 } from "./variants";
@@ -271,13 +276,37 @@ function takeFees(state: EngineState, pot: number) {
   return { net: Math.max(0, remaining), rake, bbjpFee };
 }
 
+function payWinners(
+  potWinners: Array<{ seat: EngineSeat; score: HandScore; label: string }>,
+  net: number,
+  winnersOut: HandResult["winners"],
+) {
+  if (!potWinners.length || net <= 0) return;
+  const share = Math.floor((net / potWinners.length) * 100) / 100;
+  let paid = 0;
+  potWinners.forEach((w, i) => {
+    const amount =
+      i === potWinners.length - 1 ? Math.round((net - paid) * 100) / 100 : share;
+    paid += amount;
+    w.seat.stack += amount;
+    winnersOut.push({
+      seat: w.seat.seat,
+      amount,
+      hand: w.label,
+    });
+  });
+}
+
 function showdown(state: EngineState) {
   collectBets(state);
   state.street = "showdown";
   state.toAct = null;
   const evaluated = contenders(state).map((s) => {
     const best = bestHand(s.hole, state.board, state.gameType);
-    return { seat: s, ...best };
+    const low = isHiLo(state.gameType)
+      ? bestOmahaLow(s.hole, state.board)
+      : { score: null as HandScore | null, cards: [] as typeof s.hole };
+    return { seat: s, ...best, lowScore: low.score };
   });
   evaluated.sort((a, b) => cmpHands(b.score, a.score, state.gameType));
 
@@ -292,25 +321,67 @@ function showdown(state: EngineState) {
     for (const e of eligible) {
       if (!best || cmpHands(e.score, best, state.gameType) > 0) best = e.score;
     }
-    const potWinners = eligible.filter(
+    const highWinners = eligible.filter(
       (e) => cmpHands(e.score, best!, state.gameType) === 0,
     );
     const { net, rake, bbjpFee } = takeFees(state, pot.amount);
     totalRake += rake;
     totalBbjpFee += bbjpFee;
-    const share = Math.floor((net / potWinners.length) * 100) / 100;
-    let paid = 0;
-    potWinners.forEach((w, i) => {
-      const amount =
-        i === potWinners.length - 1 ? Math.round((net - paid) * 100) / 100 : share;
-      paid += amount;
-      w.seat.stack += amount;
-      winnersOut.push({
-        seat: w.seat.seat,
-        amount,
-        hand: handName(w.score),
-      });
-    });
+
+    if (isHiLo(state.gameType)) {
+      const lowEligible = eligible.filter((e) => e.lowScore);
+      let bestLow: HandScore | null = null;
+      for (const e of lowEligible) {
+        if (!bestLow || cmpLowScore(e.lowScore!, bestLow) > 0) {
+          bestLow = e.lowScore!;
+        }
+      }
+      const lowWinners = bestLow
+        ? lowEligible.filter((e) => cmpLowScore(e.lowScore!, bestLow!) === 0)
+        : [];
+      if (lowWinners.length) {
+        const half = Math.floor((net / 2) * 100) / 100;
+        const highHalf = net - half;
+        payWinners(
+          highWinners.map((w) => ({
+            seat: w.seat,
+            score: w.score,
+            label: `${handName(w.score)} (high)`,
+          })),
+          highHalf,
+          winnersOut,
+        );
+        payWinners(
+          lowWinners.map((w) => ({
+            seat: w.seat,
+            score: w.lowScore!,
+            label: "Low",
+          })),
+          half,
+          winnersOut,
+        );
+      } else {
+        payWinners(
+          highWinners.map((w) => ({
+            seat: w.seat,
+            score: w.score,
+            label: `${handName(w.score)} (scoop)`,
+          })),
+          net,
+          winnersOut,
+        );
+      }
+    } else {
+      payWinners(
+        highWinners.map((w) => ({
+          seat: w.seat,
+          score: w.score,
+          label: handName(w.score),
+        })),
+        net,
+        winnersOut,
+      );
+    }
   }
 
   // merge winner lines
@@ -436,6 +507,35 @@ export function startHand(
     return state;
   }
 
+  // deal first so bomb antes still see hole cards
+  const holes = holeCardCount(gameType);
+  for (let i = 0; i < holes; i++) {
+    for (const s of active) {
+      s.hole.push(state.deck.pop()!);
+    }
+  }
+  state.dealtIn = active.map((s) => s.seat);
+
+  if (isBombPot(gameType)) {
+    // Everyone antes 1 BB; no preflop betting — start on the flop.
+    const ante = opts.bb;
+    for (const s of active) {
+      takeFromStack(s, ante);
+    }
+    collectBets(state);
+    state.street = "flop";
+    dealBoard(state, 3);
+    state.currentBet = 0;
+    state.minRaise = opts.bb;
+    state.toAct = nextSeat(state, state.button, canAct);
+    state.acted = [];
+    pushLog(
+      state,
+      `Hand #${opts.handNo} · BOMB — ante ${ante}, flop ${state.board.map(cardId).join(" ")}`,
+    );
+    return state;
+  }
+
   // blinds: heads-up button posts SB
   const isHu = active.length === 2;
   const sbSeat = isHu
@@ -450,14 +550,6 @@ export function startHand(
   state.currentBet = Math.max(sbPlayer.bet, bbPlayer.bet);
   state.minRaise = opts.bb;
 
-  // deal
-  const holes = holeCardCount(gameType);
-  for (let i = 0; i < holes; i++) {
-    for (const s of active) {
-      s.hole.push(state.deck.pop()!);
-    }
-  }
-  state.dealtIn = active.map((s) => s.seat);
   state.toAct = nextSeat(state, bbSeat, canAct);
   state.acted = [];
   pushLog(
@@ -565,6 +657,12 @@ export function botDecision(state: EngineState, seatNo: number): {
   amount?: number;
 } {
   const seat = state.seats.find((s) => s.seat === seatNo)!;
+  if (isAllInOrFold(state.gameType)) {
+    // Short-stack push/fold: shove ~45% randomly when facing a decision.
+    return Math.random() < 0.45
+      ? { type: "allin" }
+      : { type: "fold" };
+  }
   const toCall = Math.max(0, state.currentBet - seat.bet);
   if (toCall === 0) return { type: "check" };
   if (toCall <= state.bb * 2 || toCall >= seat.stack) {

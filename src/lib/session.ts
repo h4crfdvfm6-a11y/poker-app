@@ -25,7 +25,12 @@ export function adminPinOk(pin: string): boolean {
 function sessionSecret(): string {
   const fromEnv = process.env.SESSION_SECRET?.trim();
   if (fromEnv) return fromEnv;
-  // Ephemeral per process until SESSION_SECRET is bound in Cursor secrets.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "SESSION_SECRET must be set in production (bind it in Cursor secrets)",
+    );
+  }
+  // Dev-only ephemeral secret so local sessions work without env.
   ephemeralSessionSecret ??= randomBytes(32).toString("hex");
   return ephemeralSessionSecret;
 }

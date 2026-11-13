@@ -1,5 +1,6 @@
 import { addMember, listMembers } from "@/lib/club";
 import { requireAdmin } from "@/lib/session";
+import { assertSameOrigin } from "@/lib/csrf";
 
 export async function GET() {
   const denied = await requireAdmin();
@@ -8,6 +9,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const csrf = assertSameOrigin(request);
+  if (csrf) return csrf;
   const denied = await requireAdmin();
   if (denied) return denied;
   const body = (await request.json().catch(() => ({}))) as {

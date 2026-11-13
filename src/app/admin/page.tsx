@@ -16,6 +16,7 @@ type Overview = {
     minimum_hand?: string;
   };
   totalRake: number;
+  botFloat?: number;
 };
 
 type Member = {
@@ -108,6 +109,7 @@ export default function AdminPage() {
   const [mttBusy, setMttBusy] = useState(false);
 
   const [bbjpAmount, setBbjpAmount] = useState("1000");
+  const [botFloatAmount, setBotFloatAmount] = useState("50000");
 
   const refresh = useCallback(async () => {
     const ov = await fetch("/api/admin/overview", { cache: "no-store" });
@@ -370,11 +372,12 @@ export default function AdminPage() {
             ["Open tables", overview.openTables],
             ["Tournaments", overview.activeTournaments],
             ["Club rake", money(overview.totalRake)],
+            ["AI float", money(overview.botFloat ?? 0)],
             ["BBJP", money(overview.bbjp.balance)],
             ["BBJP status", overview.bbjp.enabled ? "On" : "Off"],
           ].map(([label, value]) => (
             <div key={String(label)} className="panel p-4">
-              <div className="text-xs uppercase tracking-wider text-[var(--muted)]">
+              <div className="text-xs uppercase tracking-wide text-[var(--muted)]">
                 {label}
               </div>
               <div className="brand mt-1 text-2xl text-[var(--gold-strong)]">
@@ -382,6 +385,40 @@ export default function AdminPage() {
               </div>
             </div>
           ))}
+          <form
+            className="panel grid gap-2 p-4 md:col-span-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setError("");
+              const res = await fetch("/api/admin/bot-float", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ amount: Number(botFloatAmount) }),
+              });
+              const json = await res.json();
+              if (!res.ok) {
+                setError(json.error || "Could not top up AI float");
+                return;
+              }
+              await refresh();
+            }}
+          >
+            <h2 className="brand text-lg">Top up AI float</h2>
+            <p className="text-sm text-[var(--muted)]">
+              AI buy-ins are funded from this float — not minted from nowhere.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <input
+                className="field !w-36"
+                type="number"
+                value={botFloatAmount}
+                onChange={(e) => setBotFloatAmount(e.target.value)}
+              />
+              <button className="btn btn-gold !py-2" type="submit">
+                Add to float
+              </button>
+            </div>
+          </form>
         </section>
       ) : null}
 
@@ -476,7 +513,12 @@ export default function AdminPage() {
                 <option value="NLH">No-Limit Hold&apos;em</option>
                 <option value="PLO">Pot-Limit Omaha (4)</option>
                 <option value="PLO5">Pot-Limit Omaha 5</option>
+                <option value="PLO6">Pot-Limit Omaha 6</option>
+                <option value="PLO_HILO">PLO Hi-Lo</option>
                 <option value="SHORT_DECK">Short Deck (6+)</option>
+                <option value="AOF_NLH">All-in or Fold Hold&apos;em</option>
+                <option value="AOF_PLO">All-in or Fold Omaha</option>
+                <option value="BOMB_NLH">Bomb Pot Hold&apos;em</option>
               </select>
             </div>
             <div>
