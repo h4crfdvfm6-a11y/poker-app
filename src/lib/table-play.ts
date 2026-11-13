@@ -100,8 +100,9 @@ async function writeRuntime(
     state: EngineState | null;
     version: number;
   },
-) {
-  await sql(
+): Promise<boolean> {
+  const expected = patch.version - 1;
+  const rows = await sql(
     `update table_runtime
      set hand_no = coalesce($2, hand_no),
          button_seat = coalesce($3, button_seat),
@@ -109,7 +110,8 @@ async function writeRuntime(
          state_json = $5,
          version = $6,
          updated_at = now()
-     where table_id = $1`,
+     where table_id = $1 and version = $7
+     returning version`,
     [
       tableId,
       patch.handNo ?? null,
@@ -117,8 +119,10 @@ async function writeRuntime(
       patch.phase,
       JSON.stringify(patch.state ?? {}),
       patch.version,
+      expected,
     ],
   );
+  return rows.length > 0;
 }
 
 async function syncStacksFromState(tableId: string, state: EngineState) {
@@ -364,13 +368,14 @@ async function maybeRunBots(
       await markBustedPlayers(tableId);
     }
     const version = current.version + 1;
-    await writeRuntime(tableId, {
+    const wrote = await writeRuntime(tableId, {
       phase: next.street === "showdown" ? "showdown" : "hand",
       state: next,
       version,
       handNo: next.handNo,
       button: next.button,
     });
+    if (!wrote) break;
     await syncStacksFromState(tableId, next);
     current = await readRuntime(tableId);
   }
@@ -390,6 +395,11 @@ async function beginNextHand(tableId: string) {
       version: runtime.version + 1,
     });
     await maybeFinishTournament(tableId);
+    return;
+  }
+
+  // Another poller may already have started this hand.
+  if (runtime.state && runtime.phase === "hand" && runtime.state.street !== "showdown") {
     return;
   }
 
@@ -439,13 +449,14 @@ async function beginNextHand(tableId: string) {
     },
   );
 
-  await writeRuntime(tableId, {
+  const wrote = await writeRuntime(tableId, {
     handNo,
     button,
     phase: state.street === "waiting" ? "waiting" : "hand",
     state,
     version: runtime.version + 1,
   });
+  if (!wrote) return;
   await syncStacksFromState(tableId, state);
   await maybeRunBots(tableId, await readRuntime(tableId));
 }
@@ -486,11 +497,6 @@ export async function sitAtTable(
     [tableId, memberId],
   );
   if (already.length) throw new Error("Already seated");
-  const [target] = await sql<SeatRow>(
-    `select * from table_seats where table_id = $1 and seat_no = $2`,
-    [tableId, seatNo],
-  );
-  if (target?.member_id) throw new Error("Seat taken");
 
   const [member] = await sql<{ display_name: string; chip_balance: string }>(
     `select display_name, chip_balance from members where id = $1`,
@@ -499,22 +505,37 @@ export async function sitAtTable(
   if (!member) throw new Error("Player not found");
   if (num(member.chip_balance) < buyIn) throw new Error("Not enough club chips");
 
-  await sendChips(memberId, -buyIn, `table_buyin:${tableId}`);
-  await sql(
-    `insert into table_seats (table_id, seat_no, member_id, display_name, stack, is_bot, sitting_out)
-     values ($1,$2,$3,$4,$5,false,false)
-     on conflict (table_id, seat_no) do update
-     set member_id = excluded.member_id,
-         display_name = excluded.display_name,
-         stack = excluded.stack,
+  // Claim the empty seat first so two sitters cannot overwrite each other.
+  const claimed = await sql<SeatRow>(
+    `update table_seats
+     set member_id = $3,
+         display_name = $4,
+         stack = 0,
          is_bot = false,
-         sitting_out = false`,
-    [tableId, seatNo, memberId, member.display_name, buyIn],
+         sitting_out = false
+     where table_id = $1 and seat_no = $2 and member_id is null
+     returning *`,
+    [tableId, seatNo, memberId, member.display_name],
   );
+  if (!claimed.length) throw new Error("Seat taken");
 
-  // start if enough players
-  const view = await getTableView(tableId, memberId);
-  return view;
+  try {
+    await sendChips(memberId, -buyIn, `table_buyin:${tableId}`);
+    await sql(
+      `update table_seats set stack = $3 where table_id = $1 and seat_no = $2 and member_id = $4`,
+      [tableId, seatNo, buyIn, memberId],
+    );
+  } catch (error) {
+    await sql(
+      `update table_seats
+       set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
+       where table_id = $1 and seat_no = $2 and member_id = $3`,
+      [tableId, seatNo, memberId],
+    );
+    throw error;
+  }
+
+  return getTableView(tableId, memberId);
 }
 
 export async function leaveTable(tableId: string, memberId: string) {
@@ -601,13 +622,14 @@ export async function playerAction(
     await applyHandEconomy(tableId, next);
     await markBustedPlayers(tableId);
   }
-  await writeRuntime(tableId, {
+  const wrote = await writeRuntime(tableId, {
     phase: next.street === "showdown" ? "showdown" : "hand",
     state: next,
     version: runtime.version + 1,
     handNo: next.handNo,
     button: next.button,
   });
+  if (!wrote) throw new Error("Table updated — try again");
   await syncStacksFromState(tableId, next);
   await maybeRunBots(tableId, await readRuntime(tableId));
   return getTableView(tableId, memberId);

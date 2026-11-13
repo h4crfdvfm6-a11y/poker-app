@@ -379,7 +379,7 @@ export async function listMyTournamentIds(memberId: string) {
 export async function registerForTournament(tournamentId: string, memberId: string) {
   await ensureClubSeeded();
   const tournament = await getTournament(tournamentId);
-  if (!["scheduled", "running"].includes(tournament.status)) {
+  if (tournament.status !== "scheduled") {
     throw new Error("Tournament is not open for registration");
   }
   const entries = Number(tournament.entries ?? 0);

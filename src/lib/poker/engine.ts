@@ -83,11 +83,14 @@ function canAct(s: EngineSeat) {
 }
 
 function nextSeat(state: EngineState, from: number, pred: (s: EngineSeat) => boolean) {
-  const n = state.seats.length;
-  for (let i = 1; i <= n; i++) {
-    const seatNo = (from + i) % n;
-    const s = state.seats.find((x) => x.seat === seatNo);
-    if (s && pred(s)) return seatNo;
+  const ordered = [...state.seats].sort((a, b) => a.seat - b.seat);
+  if (!ordered.length) return null;
+  const at = ordered.findIndex((s) => s.seat === from);
+  const start = at >= 0 ? (at + 1) % ordered.length : ordered.findIndex((s) => s.seat > from);
+  const fromIdx = start >= 0 ? start : 0;
+  for (let i = 0; i < ordered.length; i++) {
+    const s = ordered[(fromIdx + i) % ordered.length]!;
+    if (pred(s)) return s.seat;
   }
   return null;
 }
@@ -546,11 +549,14 @@ export function serializeCards(cards: Card[]) {
 }
 
 export function nextButton(seats: EngineSeat[], button: number) {
-  const n = seats.length;
-  for (let i = 1; i <= n; i++) {
-    const seatNo = (button + i) % n;
-    const s = seats.find((x) => x.seat === seatNo);
-    if (s && !s.sittingOut && s.stack > 0) return seatNo;
+  const ordered = [...seats].sort((a, b) => a.seat - b.seat);
+  if (!ordered.length) return button;
+  const at = ordered.findIndex((s) => s.seat === button);
+  const start = at >= 0 ? (at + 1) % ordered.length : ordered.findIndex((s) => s.seat > button);
+  const fromIdx = start >= 0 ? start : 0;
+  for (let i = 0; i < ordered.length; i++) {
+    const s = ordered[(fromIdx + i) % ordered.length]!;
+    if (!s.sittingOut && s.stack > 0) return s.seat;
   }
   return button;
 }
