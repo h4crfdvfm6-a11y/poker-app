@@ -577,11 +577,29 @@ export async function leaveTable(tableId: string, memberId: string) {
     throw new Error("Wait for the hand to finish");
   }
   const table = await getTable(tableId);
-  const claimed = await sql<SeatRow>(
-    `update table_seats
-     set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
-     where table_id = $1 and member_id = $2
-     returning *`,
+  // Capture pre-clear stack/is_bot — RETURNING * after SET would always be 0/false.
+  const claimed = await sql<{
+    stack: string | number;
+    is_bot: boolean;
+    seat_no: number;
+  }>(
+    `with old as (
+       select table_id, seat_no, member_id, stack, is_bot
+       from table_seats
+       where table_id = $1 and member_id = $2
+     ),
+     upd as (
+       update table_seats t
+       set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
+       from old
+       where t.table_id = old.table_id
+         and t.seat_no = old.seat_no
+         and t.member_id = old.member_id
+       returning t.seat_no
+     )
+     select old.stack, old.is_bot, old.seat_no
+     from old
+     join upd on upd.seat_no = old.seat_no`,
     [tableId, memberId],
   );
   if (!claimed.length) throw new Error("Not seated");
