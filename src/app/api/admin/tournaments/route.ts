@@ -1,0 +1,39 @@
+import { createTournament, listTournaments } from "@/lib/club";
+import { requireAdmin } from "@/lib/session";
+
+export async function GET() {
+  const denied = await requireAdmin();
+  if (denied) return denied;
+  return Response.json({ tournaments: await listTournaments() });
+}
+
+export async function POST(request: Request) {
+  const denied = await requireAdmin();
+  if (denied) return denied;
+  const body = (await request.json().catch(() => ({}))) as {
+    title?: string;
+    buyIn?: number;
+    fee?: number;
+    startingStack?: number;
+    maxPlayers?: number;
+    blindMinutes?: number;
+    startsAt?: string | null;
+  };
+  try {
+    const tournament = await createTournament({
+      title: body.title || "FA Poker MTT",
+      buyIn: Number(body.buyIn ?? 1000),
+      fee: Number(body.fee ?? 100),
+      startingStack: Number(body.startingStack ?? 10000),
+      maxPlayers: Number(body.maxPlayers ?? 27),
+      blindMinutes: Number(body.blindMinutes ?? 10),
+      startsAt: body.startsAt ?? null,
+    });
+    return Response.json({ tournament });
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : "Failed" },
+      { status: 400 },
+    );
+  }
+}
