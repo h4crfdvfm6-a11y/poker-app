@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { sql } from "./db";
+import { sql, withTransaction } from "./db";
 import { id } from "./ids";
 
 export const DEFAULT_CLUB_ID = "club_fa_poker";
@@ -385,33 +385,53 @@ export async function joinByInvite(inviteCode: string, displayName: string) {
       DEFAULT_CLUB_ID,
     ]);
   }
-  const [club] = await sql<{ id: string; invite_code: string }>(
-    "select id, invite_code from clubs where upper(invite_code) = upper($1)",
-    [inviteCode.trim()],
-  );
-  if (!club) throw new Error("Invalid club invite code");
 
-  const members = await sql<{ c: string }>(
-    `select count(*)::text as c from members
-     where club_id = $1 and role = 'player' and status = 'active'`,
-    [club.id],
-  );
-  if (Number(members[0]?.c ?? 0) >= MAX_CLUB_MEMBERS) {
-    throw new Error("Club is full");
-  }
+  return withTransaction(async (q) => {
+    const [club] = await q<{ id: string; invite_code: string }>(
+      "select id, invite_code from clubs where upper(invite_code) = upper($1) for update",
+      [inviteCode.trim()],
+    );
+    if (!club) throw new Error("Invalid club invite code");
 
-  const recent = await sql<{ c: string }>(
-    `select count(*)::text as c from members
-     where club_id = $1
-       and role = 'player'
-       and created_at > now() - ($2 || ' minutes')::interval`,
-    [club.id, String(JOIN_WINDOW_MINUTES)],
-  );
-  if (Number(recent[0]?.c ?? 0) >= MAX_JOINS_PER_WINDOW) {
-    throw new Error("Too many joins right now — try again later");
-  }
+    // Row lock on clubs serializes joins so count checks cannot race past caps.
+    await q("select id from clubs where id = $1 for update", [club.id]);
 
-  return addMember(displayName, WELCOME_CHIPS);
+    const members = await q<{ c: string }>(
+      `select count(*)::text as c from members
+       where club_id = $1 and role = 'player' and status = 'active'`,
+      [club.id],
+    );
+    if (Number(members[0]?.c ?? 0) >= MAX_CLUB_MEMBERS) {
+      throw new Error("Club is full");
+    }
+
+    const recent = await q<{ c: string }>(
+      `select count(*)::text as c from members
+       where club_id = $1
+         and role = 'player'
+         and created_at > now() - ($2 || ' minutes')::interval`,
+      [club.id, String(JOIN_WINDOW_MINUTES)],
+    );
+    if (Number(recent[0]?.c ?? 0) >= MAX_JOINS_PER_WINDOW) {
+      throw new Error("Too many joins right now — try again later");
+    }
+
+    const memberId = id("mem");
+    const inserted = await q<Member>(
+      `insert into members (id, club_id, display_name, role, chip_balance)
+       values ($1, $2, $3, 'player', $4)
+       returning *`,
+      [memberId, club.id, displayName.trim(), WELCOME_CHIPS],
+    );
+    if (WELCOME_CHIPS > 0) {
+      await q(
+        `insert into chip_ledger (id, club_id, member_id, amount, reason, created_by)
+         values ($1, $2, $3, $4, 'welcome', 'system')`,
+        [id("led"), club.id, memberId, WELCOME_CHIPS],
+      );
+    }
+    return inserted[0]!;
+  });
 }
 
 export async function getTournament(tournamentId: string) {
