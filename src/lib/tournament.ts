@@ -72,17 +72,16 @@ export async function startTournament(tournamentId: string) {
   const tableId = id("tbl");
   const stack = tournament.starting_stack;
 
-  // Claim start first so unregister/register cannot race against a stale entry list.
+  // Claim start without table_id first (FK to cash_tables) so register/unregister lose the race.
   const claimed = await sql(
     `update tournaments
      set status = 'running',
-         table_id = $2,
-         blind_level = $3,
+         blind_level = $2,
          level_started_at = now(),
          prize_pool = 0
      where id = $1 and status = 'scheduled'
      returning id`,
-    [tournamentId, tableId, level],
+    [tournamentId, level],
   );
   if (!claimed.length) {
     throw new Error("Tournament already started or finished");
@@ -108,8 +107,8 @@ export async function startTournament(tournamentId: string) {
            blind_level = 1,
            level_started_at = null,
            prize_pool = 0
-       where id = $1 and status = 'running' and table_id = $2`,
-      [tournamentId, tableId],
+       where id = $1 and status = 'running' and table_id is null`,
+      [tournamentId],
     );
     if (entries.length < 2) {
       throw new Error("Need at least 2 registered players to start");
@@ -152,8 +151,10 @@ export async function startTournament(tournamentId: string) {
   );
 
   await sql(
-    `update tournaments set prize_pool = $2 where id = $1 and status = 'running'`,
-    [tournamentId, prizePool],
+    `update tournaments
+     set table_id = $2, prize_pool = $3
+     where id = $1 and status = 'running'`,
+    [tournamentId, tableId, prizePool],
   );
 
   const rows = await listTournaments();
