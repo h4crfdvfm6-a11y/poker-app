@@ -18,6 +18,17 @@ type TableView = {
     rakePercent: number;
     rakeCapBb: number;
     bbjpEnabled: boolean;
+    format?: string;
+    status?: string;
+  };
+  tournament: null | {
+    id: string;
+    title: string;
+    status: string;
+    blindLevel: number;
+    blindMinutes: number;
+    prizePool: number;
+    winnerMemberId: string | null;
   };
   seats: Array<{
     seat: number;
@@ -214,6 +225,12 @@ export default function TablePage() {
   }
 
   const handSeats = view.hand?.seats ?? [];
+  const isTournament = view.table.format === "tournament" || Boolean(view.tournament);
+  const tournamentDone = view.tournament?.status === "finished";
+  const iWon =
+    tournamentDone &&
+    view.tournament?.winnerMemberId &&
+    view.tournament.winnerMemberId === view.meMemberId;
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-lg flex-col px-3 pb-8 pt-[max(12px,env(safe-area-inset-top))]">
@@ -224,16 +241,38 @@ export default function TablePage() {
           </Link>
           <h1 className="brand text-xl text-[var(--gold-strong)]">{view.table.title}</h1>
           <p className="text-xs text-[var(--muted)]">
-            {view.table.sb}/{view.table.bb} · Rake {view.table.rakePercent}% /{" "}
-            {view.table.rakeCapBb}BB
-            {view.table.bbjpEnabled ? " · BBJP" : ""}
+            {view.table.sb}/{view.table.bb}
+            {isTournament
+              ? ` · Level ${view.tournament?.blindLevel ?? 1} · Prize ${view.tournament?.prizePool?.toLocaleString() ?? 0}`
+              : ` · Rake ${view.table.rakePercent}% / ${view.table.rakeCapBb}BB${view.table.bbjpEnabled ? " · BBJP" : ""}`}
           </p>
         </div>
         <div className="text-right text-xs text-[var(--muted)]">
-          <div>BBJP {view.bbjp.balance.toLocaleString()}</div>
-          <div>{view.phase}</div>
+          {isTournament ? (
+            <>
+              <div>{view.tournament?.status ?? view.phase}</div>
+              <div>Blinds every {view.tournament?.blindMinutes ?? "—"}m</div>
+            </>
+          ) : (
+            <>
+              <div>BBJP {view.bbjp.balance.toLocaleString()}</div>
+              <div>{view.phase}</div>
+            </>
+          )}
         </div>
       </div>
+
+      {tournamentDone ? (
+        <div className="panel mb-3 p-4 text-center">
+          <div className="brand text-2xl text-[var(--gold-strong)]">
+            {iWon ? "You won!" : "Tournament finished"}
+          </div>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Prize pool {view.tournament?.prizePool?.toLocaleString() ?? 0} club chips
+            paid to the winner.
+          </p>
+        </div>
+      ) : null}
 
       {error ? <p className="mb-2 text-sm text-[#ffb4b6]">{error}</p> : null}
 
@@ -271,7 +310,7 @@ export default function TablePage() {
               className={`absolute z-20 w-28 -translate-x-1/2 ${SEAT_POS[seat.seat] || SEAT_POS[0]}`}
             >
               <button
-                disabled={busy || !seat.empty}
+                disabled={busy || !seat.empty || isTournament}
                 onClick={() => sit(seat.seat)}
                 className={`w-full rounded-2xl border px-2 py-2 text-left ${
                   active
@@ -283,7 +322,11 @@ export default function TablePage() {
                   {seat.empty ? `Seat ${seat.seat + 1}` : seat.name}
                 </div>
                 <div className="text-[11px] text-[var(--muted)]">
-                  {seat.empty ? "Tap to sit" : seat.stack.toLocaleString()}
+                  {seat.empty
+                    ? isTournament
+                      ? "Empty"
+                      : "Tap to sit"
+                    : seat.stack.toLocaleString()}
                 </div>
                 {live?.bet ? (
                   <div className="text-[11px] text-[var(--gold)]">Bet {live.bet}</div>
@@ -303,23 +346,31 @@ export default function TablePage() {
         })}
       </div>
 
-      <div className="mb-3 flex flex-wrap gap-2">
-        <input
-          className="field !w-28 !py-2"
-          type="number"
-          value={buyIn}
-          onChange={(e) => setBuyIn(e.target.value)}
-          title="Buy-in"
-        />
-        <button className="btn btn-ghost !py-2 !text-sm" disabled={busy} onClick={addBot}>
-          Add AI seat
-        </button>
-        {seated ? (
-          <button className="btn btn-danger !py-2 !text-sm" disabled={busy} onClick={leave}>
-            Leave table
+      {!isTournament ? (
+        <div className="mb-3 flex flex-wrap gap-2">
+          <input
+            className="field !w-28 !py-2"
+            type="number"
+            value={buyIn}
+            onChange={(e) => setBuyIn(e.target.value)}
+            title="Buy-in"
+          />
+          <button className="btn btn-ghost !py-2 !text-sm" disabled={busy} onClick={addBot}>
+            Add AI seat
           </button>
-        ) : null}
-      </div>
+          {seated ? (
+            <button className="btn btn-danger !py-2 !text-sm" disabled={busy} onClick={leave}>
+              Leave table
+            </button>
+          ) : null}
+        </div>
+      ) : seated && !tournamentDone ? (
+        <div className="mb-3">
+          <button className="btn btn-danger !py-2 !text-sm" disabled={busy} onClick={leave}>
+            Forfeit tournament
+          </button>
+        </div>
+      ) : null}
 
       {view.actions?.length ? (
         <div className="mb-3 grid gap-3">
@@ -383,8 +434,11 @@ export default function TablePage() {
         </div>
       ) : (
         <p className="mb-3 text-sm text-[var(--muted)]">
-          Sit down and add an AI seat (or another player) to start a hand. Rake is taken from pots
-          automatically.
+          {isTournament
+            ? tournamentDone
+              ? "Head back to the lobby for the next event."
+              : "Waiting for the next tournament hand…"
+            : "Sit down and add an AI seat (or another player) to start a hand. Rake is taken from pots automatically."}
         </p>
       )}
 

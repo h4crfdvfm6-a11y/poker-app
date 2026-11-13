@@ -40,6 +40,9 @@ type Tournament = {
   max_players: number;
   entries: string | number;
   status: string;
+  table_id?: string | null;
+  prize_pool?: string | number;
+  blind_level?: number;
 };
 
 type Bbjp = {
@@ -89,9 +92,10 @@ export default function AdminPage() {
     buyIn: "1000",
     fee: "100",
     startingStack: "10000",
-    maxPlayers: "27",
-    blindMinutes: "10",
+    maxPlayers: "9",
+    blindMinutes: "5",
   });
+  const [mttBusy, setMttBusy] = useState(false);
 
   const [bbjpAmount, setBbjpAmount] = useState("1000");
 
@@ -233,6 +237,21 @@ export default function AdminPage() {
     const json = await res.json();
     if (!res.ok) {
       setError(json.error || "Could not create tournament");
+      return;
+    }
+    await refresh();
+  }
+
+  async function startMtt(id: string) {
+    setMttBusy(true);
+    setError("");
+    const res = await fetch(`/api/admin/tournaments/${id}/start`, {
+      method: "POST",
+    });
+    const json = await res.json();
+    setMttBusy(false);
+    if (!res.ok) {
+      setError(json.error || "Could not start tournament");
       return;
     }
     await refresh();
@@ -670,7 +689,27 @@ export default function AdminPage() {
                 </p>
                 <p className="text-sm text-[var(--gold)]">
                   {Number(t.entries)} / {t.max_players} entries
+                  {t.status === "running" && t.prize_pool != null
+                    ? ` · prize ${money(t.prize_pool)}`
+                    : ""}
                 </p>
+                {t.status === "scheduled" ? (
+                  <button
+                    className="btn btn-gold mt-3 !py-2 !text-sm"
+                    disabled={mttBusy || Number(t.entries) < 2}
+                    onClick={() => startMtt(t.id)}
+                  >
+                    Start single table
+                  </button>
+                ) : null}
+                {t.status === "running" && t.table_id ? (
+                  <Link
+                    href={`/table/${t.table_id}`}
+                    className="btn btn-ghost mt-3 !py-2 !text-sm"
+                  >
+                    Open table
+                  </Link>
+                ) : null}
               </div>
             ))}
           </div>

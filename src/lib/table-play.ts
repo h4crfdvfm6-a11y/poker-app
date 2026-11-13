@@ -12,6 +12,12 @@ import {
   type EngineState,
 } from "./poker/engine";
 import { cardId } from "./poker/cards";
+import {
+  getTournamentByTable,
+  markBustedPlayers,
+  maybeAdvanceTournamentBlinds,
+  maybeFinishTournament,
+} from "./tournament";
 
 export type SeatRow = {
   table_id: string;
@@ -35,6 +41,7 @@ export type TableRow = {
   rake_cap_bb: string | number;
   bbjp_enabled: boolean;
   status: string;
+  format: string;
 };
 
 async function ensureRuntime(tableId: string) {
@@ -50,11 +57,12 @@ async function ensureRuntime(tableId: string) {
   }
 }
 
-async function getTable(tableId: string) {
+async function getTable(tableId: string, allowClosed = false) {
   const [table] = await sql<TableRow>("select * from cash_tables where id = $1", [
     tableId,
   ]);
-  if (!table || table.status !== "open") throw new Error("Table not open");
+  if (!table) throw new Error("Table not found");
+  if (!allowClosed && table.status !== "open") throw new Error("Table not open");
   return table;
 }
 
@@ -215,7 +223,9 @@ function maskState(state: EngineState | null, viewerMemberId: string | null) {
 
 export async function getTableView(tableId: string, viewerMemberId: string | null) {
   await ensureClubSeeded();
-  const table = await getTable(tableId);
+  let tournament = await getTournamentByTable(tableId);
+  const finished = tournament?.status === "finished";
+  const table = await getTable(tableId, finished);
   await ensureRuntime(tableId);
   let seats = await getSeats(tableId);
   if (seats.length !== table.seats) {
@@ -231,32 +241,49 @@ export async function getTableView(tableId: string, viewerMemberId: string | nul
   }
   let runtime = await readRuntime(tableId);
 
+  if (table.status === "open" && tournament?.status === "running") {
+    tournament = (await maybeAdvanceTournamentBlinds(tableId)) ?? tournament;
+  }
+
   // auto-run bot actions
-  if (runtime.state && runtime.state.toAct != null) {
+  if (runtime.state && runtime.state.toAct != null && table.status === "open") {
     runtime = await maybeRunBots(tableId, runtime);
   }
 
   // auto-start next hand after short showdown pause
-  if (
-    runtime.state &&
-    runtime.state.street === "showdown" &&
-    runtime.state.endedAt &&
-    Date.now() - runtime.state.endedAt > 3500
-  ) {
-    await beginNextHand(tableId);
-    runtime = await readRuntime(tableId);
-  } else if (!runtime.state || runtime.phase === "waiting") {
-    const occupied = seats.filter((s) => s.member_id && num(s.stack) > 0);
-    if (occupied.length >= 2) {
-      await beginNextHand(tableId);
+  if (table.status === "open") {
+    if (
+      runtime.state &&
+      runtime.state.street === "showdown" &&
+      runtime.state.endedAt &&
+      Date.now() - runtime.state.endedAt > 3500
+    ) {
+      await markBustedPlayers(tableId);
+      const finishedNow = await maybeFinishTournament(tableId);
+      if (!finishedNow) {
+        await beginNextHand(tableId);
+      }
       runtime = await readRuntime(tableId);
+      tournament = (await getTournamentByTable(tableId)) ?? tournament;
+    } else if (!runtime.state || runtime.phase === "waiting") {
+      const occupied = seats.filter((s) => s.member_id && num(s.stack) > 0);
+      if (occupied.length >= 2) {
+        await beginNextHand(tableId);
+        runtime = await readRuntime(tableId);
+      } else if (tournament?.status === "running") {
+        await maybeFinishTournament(tableId);
+        tournament = (await getTournamentByTable(tableId)) ?? tournament;
+        runtime = await readRuntime(tableId);
+      }
     }
   }
 
+  const refreshed = await getTable(tableId, true);
+  seats = await getSeats(tableId);
   const bbjp = await getBbjp();
   const mySeat = runtime.state?.seats.find((s) => s.memberId === viewerMemberId);
   const legal =
-    runtime.state && mySeat
+    runtime.state && mySeat && refreshed.status === "open"
       ? legalActions(runtime.state, mySeat.seat)
       : { actions: [], sizing: null };
   const myTableSeat = seats.find((s) => s.member_id === viewerMemberId);
@@ -265,17 +292,30 @@ export async function getTableView(tableId: string, viewerMemberId: string | nul
     meMemberId: viewerMemberId,
     meSeat: myTableSeat ? myTableSeat.seat_no : null,
     table: {
-      id: table.id,
-      title: table.title,
-      sb: num(table.sb),
-      bb: num(table.bb),
-      seats: table.seats,
-      buyinMin: num(table.buyin_min),
-      buyinMax: num(table.buyin_max),
-      rakePercent: num(table.rake_percent),
-      rakeCapBb: num(table.rake_cap_bb),
-      bbjpEnabled: table.bbjp_enabled,
+      id: refreshed.id,
+      title: refreshed.title,
+      sb: num(refreshed.sb),
+      bb: num(refreshed.bb),
+      seats: refreshed.seats,
+      buyinMin: num(refreshed.buyin_min),
+      buyinMax: num(refreshed.buyin_max),
+      rakePercent: num(refreshed.rake_percent),
+      rakeCapBb: num(refreshed.rake_cap_bb),
+      bbjpEnabled: refreshed.bbjp_enabled,
+      format: refreshed.format,
+      status: refreshed.status,
     },
+    tournament: tournament
+      ? {
+          id: tournament.id,
+          title: tournament.title,
+          status: tournament.status,
+          blindLevel: tournament.blind_level ?? 1,
+          blindMinutes: tournament.blind_minutes,
+          prizePool: num(tournament.prize_pool ?? 0),
+          winnerMemberId: tournament.winner_member_id ?? null,
+        }
+      : null,
     seats: seats.map((s) => ({
       seat: s.seat_no,
       memberId: s.member_id,
@@ -312,6 +352,7 @@ async function maybeRunBots(
     const next = applyAction(state, actor.seat, decision.type, decision.amount ?? 0);
     if (next.street === "showdown") {
       await applyHandEconomy(tableId, next);
+      await markBustedPlayers(tableId);
     }
     const version = current.version + 1;
     await writeRuntime(tableId, {
@@ -328,6 +369,7 @@ async function maybeRunBots(
 }
 
 async function beginNextHand(tableId: string) {
+  await maybeAdvanceTournamentBlinds(tableId);
   const table = await getTable(tableId);
   const seats = await getSeats(tableId);
   const runtime = await readRuntime(tableId);
@@ -338,10 +380,12 @@ async function beginNextHand(tableId: string) {
       state: null,
       version: runtime.version + 1,
     });
+    await maybeFinishTournament(tableId);
     return;
   }
 
   const bbjp = await getBbjp();
+  const isTournament = table.format === "tournament";
   const button =
     runtime.hand_no === 0
       ? occupied[0]!.seat_no
@@ -379,9 +423,9 @@ async function beginNextHand(tableId: string) {
       button,
       sb: num(table.sb),
       bb: num(table.bb),
-      rakePercent: num(table.rake_percent),
-      rakeCapBb: num(table.rake_cap_bb),
-      bbjpEnabled: Boolean(table.bbjp_enabled) && bbjp.enabled,
+      rakePercent: isTournament ? 0 : num(table.rake_percent),
+      rakeCapBb: isTournament ? 0 : num(table.rake_cap_bb),
+      bbjpEnabled: !isTournament && Boolean(table.bbjp_enabled) && bbjp.enabled,
       bbjpTrigger: bbjp.trigger_hand,
     },
   );
@@ -405,6 +449,9 @@ export async function sitAtTable(
 ) {
   await ensureClubSeeded();
   const table = await getTable(tableId);
+  if (table.format === "tournament") {
+    throw new Error("Tournament seats are assigned at start");
+  }
   if (seatNo < 0 || seatNo >= table.seats) throw new Error("Invalid seat");
   if (buyIn < num(table.buyin_min) || buyIn > num(table.buyin_max)) {
     throw new Error(
@@ -466,6 +513,7 @@ export async function leaveTable(tableId: string, memberId: string) {
   if (runtime.state && !["waiting", "showdown"].includes(runtime.state.street)) {
     throw new Error("Wait for the hand to finish");
   }
+  const table = await getTable(tableId);
   const [seat] = await sql<SeatRow>(
     `select * from table_seats where table_id = $1 and member_id = $2`,
     [tableId, memberId],
@@ -473,20 +521,28 @@ export async function leaveTable(tableId: string, memberId: string) {
   if (!seat) throw new Error("Not seated");
   const stack = num(seat.stack);
   const wasBot = seat.is_bot;
+  const isTournament = table.format === "tournament";
   await sql(
     `update table_seats
      set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
      where table_id = $1 and seat_no = $2`,
     [tableId, seat.seat_no],
   );
-  if (!wasBot && stack > 0) {
+  // Tournament chips are not club chips — leaving forfeits the stack.
+  if (!isTournament && !wasBot && stack > 0) {
     await sendChips(memberId, stack, `table_cashout:${tableId}`);
+  }
+  if (isTournament) {
+    await maybeFinishTournament(tableId);
   }
   return getTableView(tableId, wasBot ? null : memberId);
 }
 
 export async function addBot(tableId: string, seatNo?: number) {
   const table = await getTable(tableId);
+  if (table.format === "tournament") {
+    throw new Error("Cannot add bots to a running tournament");
+  }
   await ensureRuntime(tableId);
   const seats = await getSeats(tableId);
   if (!seats.length) {
@@ -534,6 +590,7 @@ export async function playerAction(
   let next = applyAction(runtime.state, seat.seat, type, amount);
   if (next.street === "showdown") {
     await applyHandEconomy(tableId, next);
+    await markBustedPlayers(tableId);
   }
   await writeRuntime(tableId, {
     phase: next.street === "showdown" ? "showdown" : "hand",

@@ -47,6 +47,11 @@ export type Tournament = {
   starts_at: string | null;
   created_at: string;
   entries?: number;
+  table_id?: string | null;
+  blind_level?: number;
+  level_started_at?: string | null;
+  prize_pool?: string | number;
+  winner_member_id?: string | null;
 };
 
 export async function ensureClubSeeded() {
@@ -184,7 +189,9 @@ export async function sendChips(
 export async function listTables(clubId = DEFAULT_CLUB_ID) {
   await ensureClubSeeded();
   return sql<CashTable>(
-    `select * from cash_tables where club_id = $1 order by created_at desc`,
+    `select * from cash_tables
+     where club_id = $1 and format = 'ring'
+     order by created_at desc`,
     [clubId],
   );
 }

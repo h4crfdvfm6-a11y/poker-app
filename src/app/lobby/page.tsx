@@ -26,6 +26,9 @@ type LobbyData = {
     max_players: number;
     entries: string | number;
     status: string;
+    table_id?: string | null;
+    prize_pool?: string | number;
+    blind_level?: number;
   }>;
   bbjp: { balance: string | number; enabled: boolean; trigger_hand: string };
   me: { id: string; display_name: string; chip_balance: string | number } | null;
@@ -210,6 +213,7 @@ export default function LobbyPage() {
           ) : (
             data.tournaments.map((t) => {
               const registered = (data.myTournamentIds || []).includes(t.id);
+              const running = t.status === "running" && t.table_id;
               return (
                 <article key={t.id} className="panel p-4">
                   <div className="mb-1 flex items-center justify-between gap-2">
@@ -223,14 +227,30 @@ export default function LobbyPage() {
                   <p className="mt-1 text-sm text-[var(--gold)]">
                     {Number(t.entries)} / {t.max_players} registered
                     {registered ? " · You’re in" : ""}
+                    {running && t.prize_pool != null
+                      ? ` · prize ${money(t.prize_pool)}`
+                      : ""}
                   </p>
-                  <button
-                    className={`btn mt-3 !py-2 !text-sm ${registered ? "btn-ghost" : "btn-gold"}`}
-                    disabled={busy || !data.me}
-                    onClick={() => toggleMtt(t.id, registered)}
-                  >
-                    {registered ? "Unregister" : "Register"}
-                  </button>
+                  {running && registered ? (
+                    <Link
+                      href={`/table/${t.table_id}`}
+                      className="btn btn-gold mt-3 !py-2 !text-sm"
+                    >
+                      Play tournament
+                    </Link>
+                  ) : t.status === "scheduled" ? (
+                    <button
+                      className={`btn mt-3 !py-2 !text-sm ${registered ? "btn-ghost" : "btn-gold"}`}
+                      disabled={busy || !data.me}
+                      onClick={() => toggleMtt(t.id, registered)}
+                    >
+                      {registered ? "Unregister" : "Register"}
+                    </button>
+                  ) : running ? (
+                    <p className="mt-3 text-sm text-[var(--muted)]">
+                      In progress — register next time to play.
+                    </p>
+                  ) : null}
                 </article>
               );
             })
