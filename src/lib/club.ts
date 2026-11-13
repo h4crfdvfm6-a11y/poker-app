@@ -442,13 +442,24 @@ export async function unregisterFromTournament(
     throw new Error("Can only unregister before the tournament starts");
   }
 
+  // Delete only while still scheduled so a concurrent start claim wins cleanly.
   const deleted = await sql(
-    `delete from tournament_entries
-     where tournament_id = $1 and member_id = $2
-     returning member_id`,
+    `delete from tournament_entries te
+     using tournaments t
+     where te.tournament_id = $1
+       and te.member_id = $2
+       and t.id = te.tournament_id
+       and t.status = 'scheduled'
+     returning te.member_id`,
     [tournamentId, memberId],
   );
-  if (!deleted.length) throw new Error("Not registered");
+  if (!deleted.length) {
+    const still = await getTournament(tournamentId);
+    if (still.status !== "scheduled") {
+      throw new Error("Can only unregister before the tournament starts");
+    }
+    throw new Error("Not registered");
+  }
 
   const refund = num(tournament.buy_in) + num(tournament.fee);
   await sendChips(memberId, refund, `mtt_unregister:${tournamentId}`);

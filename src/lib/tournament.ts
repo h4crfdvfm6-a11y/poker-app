@@ -67,6 +67,27 @@ export async function startTournament(tournamentId: string) {
     throw new Error("Tournament already started or finished");
   }
 
+  const level = 1;
+  const { sb, bb } = blindsForLevel(level);
+  const tableId = id("tbl");
+  const stack = tournament.starting_stack;
+
+  // Claim start first so unregister/register cannot race against a stale entry list.
+  const claimed = await sql(
+    `update tournaments
+     set status = 'running',
+         table_id = $2,
+         blind_level = $3,
+         level_started_at = now(),
+         prize_pool = 0
+     where id = $1 and status = 'scheduled'
+     returning id`,
+    [tournamentId, tableId, level],
+  );
+  if (!claimed.length) {
+    throw new Error("Tournament already started or finished");
+  }
+
   const entries = await sql<{
     member_id: string;
     display_name: string;
@@ -79,35 +100,25 @@ export async function startTournament(tournamentId: string) {
     [tournamentId],
   );
 
-  if (entries.length < 2) {
-    throw new Error("Need at least 2 registered players to start");
-  }
-  if (entries.length > 9) {
+  if (entries.length < 2 || entries.length > 9) {
+    await sql(
+      `update tournaments
+       set status = 'scheduled',
+           table_id = null,
+           blind_level = 1,
+           level_started_at = null,
+           prize_pool = 0
+       where id = $1 and status = 'running' and table_id = $2`,
+      [tournamentId, tableId],
+    );
+    if (entries.length < 2) {
+      throw new Error("Need at least 2 registered players to start");
+    }
     throw new Error("Single-table start supports up to 9 players");
   }
 
-  const level = 1;
-  const { sb, bb } = blindsForLevel(level);
-  const tableId = id("tbl");
   const seats = entries.length;
-  const stack = tournament.starting_stack;
   const prizePool = num(tournament.buy_in) * entries.length;
-
-  // Claim start before seating so late registers cannot race into a running event.
-  const claimed = await sql(
-    `update tournaments
-     set status = 'running',
-         table_id = $2,
-         blind_level = $3,
-         level_started_at = now(),
-         prize_pool = $4
-     where id = $1 and status = 'scheduled'
-     returning id`,
-    [tournamentId, tableId, level, prizePool],
-  );
-  if (!claimed.length) {
-    throw new Error("Tournament already started or finished");
-  }
 
   await sql(
     `insert into cash_tables (
@@ -138,6 +149,11 @@ export async function startTournament(tournamentId: string) {
     `insert into table_runtime (table_id, hand_no, button_seat, version, phase, state_json)
      values ($1, 0, 0, 0, 'waiting', '{}')`,
     [tableId],
+  );
+
+  await sql(
+    `update tournaments set prize_pool = $2 where id = $1 and status = 'running'`,
+    [tournamentId, prizePool],
   );
 
   const rows = await listTournaments();
