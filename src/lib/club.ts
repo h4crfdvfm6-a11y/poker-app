@@ -2,6 +2,11 @@ import { randomBytes } from "node:crypto";
 import { minimumHandFromCollections } from "./bbjp-ladder";
 import { sql, withTransaction } from "./db";
 import { id } from "./ids";
+import {
+  gameTypeLabel,
+  isGameType,
+  type GameType,
+} from "./poker/variants";
 
 export const DEFAULT_CLUB_ID = "club_fa_poker";
 const MAX_CLUB_MEMBERS = 48;
@@ -231,6 +236,7 @@ export async function listPublicTables(clubId = DEFAULT_CLUB_ID) {
 
 export async function createTable(input: {
   title: string;
+  gameType?: string;
   sb: number;
   bb: number;
   seats: number;
@@ -245,16 +251,22 @@ export async function createTable(input: {
   if (input.rakePercent < 0 || input.rakePercent > 20) {
     throw new Error("Rake percent must be between 0 and 20");
   }
+  const gameType: GameType = isGameType(input.gameType ?? "NLH")
+    ? (input.gameType as GameType)
+    : "NLH";
   const tableId = id("tbl");
+  const title =
+    input.title.trim() || `${gameTypeLabel(gameType)} ${input.sb}/${input.bb}`;
   await sql(
     `insert into cash_tables (
       id, club_id, title, game_type, format, sb, bb, seats,
       buyin_min, buyin_max, rake_percent, rake_cap_bb, bbjp_enabled, is_private, status
-    ) values ($1,$2,$3,'NLH','ring',$4,$5,$6,$7,$8,$9,$10,$11,$12,'open')`,
+    ) values ($1,$2,$3,$4,'ring',$5,$6,$7,$8,$9,$10,$11,$12,$13,'open')`,
     [
       tableId,
       DEFAULT_CLUB_ID,
-      input.title.trim(),
+      title,
+      gameType,
       input.sb,
       input.bb,
       input.seats,

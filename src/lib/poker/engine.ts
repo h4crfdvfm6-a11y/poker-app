@@ -1,12 +1,17 @@
-import { Card, cardId, freshDeck, shuffle } from "./cards";
+import { Card, cardId, freshDeck, shortDeck, shuffle } from "./cards";
 import {
-  bestOfSeven,
+  bestHand,
   cmpScore,
   handName,
   meetsBbjpTrigger,
-  usesBothHoleCards,
+  qualifiesBbjpHoleUse,
   type HandScore,
 } from "./eval";
+import {
+  holeCardCount,
+  isPotLimit,
+  type GameType,
+} from "./variants";
 
 export type Street = "preflop" | "flop" | "turn" | "river" | "showdown" | "waiting";
 
@@ -64,6 +69,7 @@ export type EngineState = {
   bbjpTrigger: string;
   dealtIn: number[];
   endedAt: number | null;
+  gameType: GameType;
 };
 
 function alive(s: EngineSeat) {
@@ -270,7 +276,7 @@ function showdown(state: EngineState) {
   state.street = "showdown";
   state.toAct = null;
   const evaluated = contenders(state).map((s) => {
-    const best = bestOfSeven(s.hole, state.board);
+    const best = bestHand(s.hole, state.board, state.gameType);
     return { seat: s, ...best };
   });
   evaluated.sort((a, b) => cmpScore(b.score, a.score));
@@ -330,8 +336,8 @@ function showdown(state: EngineState) {
     const loser = evaluated[1]!;
     if (
       meetsBbjpTrigger(loser.score, state.bbjpTrigger) &&
-      usesBothHoleCards(loser.seat.hole, loser.cards) &&
-      usesBothHoleCards(winner.seat.hole, winner.cards)
+      qualifiesBbjpHoleUse(loser.seat.hole, loser.cards, state.gameType) &&
+      qualifiesBbjpHoleUse(winner.seat.hole, winner.cards, state.gameType)
     ) {
       // payout amounts applied by table-play using club pool; record shares
       result.bbjpHit = {
@@ -377,8 +383,10 @@ export function startHand(
     rakeCapBb: number;
     bbjpEnabled: boolean;
     bbjpTrigger: string;
+    gameType?: GameType;
   },
 ): EngineState {
+  const gameType: GameType = opts.gameType ?? "NLH";
   const seats: EngineSeat[] = seatsIn.map((s) => ({
     seat: s.seat,
     memberId: s.memberId,
@@ -396,7 +404,7 @@ export function startHand(
   const state: EngineState = {
     handNo: opts.handNo,
     street: "preflop",
-    deck: shuffle(freshDeck()),
+    deck: shuffle(gameType === "SHORT_DECK" ? shortDeck() : freshDeck()),
     board: [],
     seats,
     button: opts.button,
@@ -417,6 +425,7 @@ export function startHand(
     bbjpTrigger: opts.bbjpTrigger,
     dealtIn: [],
     endedAt: null,
+    gameType,
   };
 
   const active = seats.filter((s) => !s.sittingOut && s.stack > 0);
@@ -440,7 +449,8 @@ export function startHand(
   state.minRaise = opts.bb;
 
   // deal
-  for (let i = 0; i < 2; i++) {
+  const holes = holeCardCount(gameType);
+  for (let i = 0; i < holes; i++) {
     for (const s of active) {
       s.hole.push(state.deck.pop()!);
     }
@@ -448,8 +458,21 @@ export function startHand(
   state.dealtIn = active.map((s) => s.seat);
   state.toAct = nextSeat(state, bbSeat, canAct);
   state.acted = [];
-  pushLog(state, `Hand #${opts.handNo} — SB ${sbPlayer.name}, BB ${bbPlayer.name}`);
+  pushLog(
+    state,
+    `Hand #${opts.handNo} · ${gameType} — SB ${sbPlayer.name}, BB ${bbPlayer.name}`,
+  );
   return state;
+}
+
+/** Pot-limit: max total bet-to = seat.bet + toCall + (pot including toCall). */
+export function potLimitMaxTo(state: EngineState, seatNo: number): number {
+  const seat = state.seats.find((s) => s.seat === seatNo);
+  if (!seat) return 0;
+  const toCall = Math.max(0, state.currentBet - seat.bet);
+  const pot = publicPot(state);
+  const maxRaiseBy = pot + toCall;
+  return Math.min(seat.bet + seat.stack, seat.bet + toCall + maxRaiseBy);
 }
 
 export type ActionType = "fold" | "check" | "call" | "bet" | "raise" | "allin";
@@ -487,6 +510,12 @@ export function applyAction(
     const target = amount;
     const need = target - seat.bet;
     if (need <= 0 || need > seat.stack) throw new Error("Bad bet size");
+    if (isPotLimit(state.gameType)) {
+      const maxTo = potLimitMaxTo(state, seatNo);
+      if (target > maxTo + 1e-9 && need < seat.stack) {
+        throw new Error(`Pot-limit max ${maxTo}`);
+      }
+    }
     const raiseBy = target - state.currentBet;
     if (state.currentBet > 0 && raiseBy < state.minRaise && need < seat.stack) {
       throw new Error(`Min raise ${state.minRaise}`);

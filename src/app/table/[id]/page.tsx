@@ -19,6 +19,7 @@ type TableView = {
     rakeCapBb: number;
     bbjpEnabled: boolean;
     format?: string;
+    gameType?: string;
     status?: string;
   };
   tournament: null | {
@@ -247,7 +248,7 @@ export default function TablePage() {
           </Link>
           <h1 className="brand text-xl text-[var(--gold-strong)]">{view.table.title}</h1>
           <p className="text-xs text-[var(--muted)]">
-            {view.table.sb}/{view.table.bb}
+            {view.table.gameType || "NLH"} · {view.table.sb}/{view.table.bb}
             {isTournament
               ? ` · Level ${view.tournament?.blindLevel ?? 1} · Prize ${view.tournament?.prizePool?.toLocaleString() ?? 0}`
               : ` · Rake ${view.table.rakePercent}% / ${view.table.rakeCapBb}BB${view.table.bbjpEnabled ? " · BBJP" : ""}`}

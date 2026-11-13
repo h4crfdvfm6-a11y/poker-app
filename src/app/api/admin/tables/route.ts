@@ -12,6 +12,7 @@ export async function POST(request: Request) {
   if (denied) return denied;
   const body = (await request.json().catch(() => ({}))) as {
     title?: string;
+    gameType?: string;
     sb?: number;
     bb?: number;
     seats?: number;
@@ -24,7 +25,8 @@ export async function POST(request: Request) {
   };
   try {
     const table = await createTable({
-      title: body.title || `NLH ${body.sb}/${body.bb}`,
+      title: body.title || "",
+      gameType: body.gameType || "NLH",
       sb: Number(body.sb ?? 25),
       bb: Number(body.bb ?? 50),
       seats: Number(body.seats ?? 6),

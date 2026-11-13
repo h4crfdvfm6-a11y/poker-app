@@ -1,4 +1,6 @@
 import type { Card } from "./cards";
+import type { GameType } from "./variants";
+import { isOmaha } from "./variants";
 
 /** Lower score is worse. Returns [category, ...kickers] comparable lexicographically. */
 export type HandScore = number[];
@@ -13,6 +15,13 @@ const CAT = {
   fullHouse: 6,
   quads: 7,
   straightFlush: 8,
+} as const;
+
+/** Short Deck: flush beats full house. */
+const SHORT_CAT = {
+  ...CAT,
+  fullHouse: 5,
+  flush: 6,
 } as const;
 
 function uniqueSortedRanks(cards: Card[]): number[] {
@@ -77,6 +86,82 @@ export function evaluateFive(cards: Card[]): HandScore {
   return [CAT.high, ...ranks];
 }
 
+function straightHighShort(ranks: number[]): number | null {
+  const set = new Set(ranks);
+  // A-6-7-8-9 is the short-deck wheel
+  if ([14, 6, 7, 8, 9].every((r) => set.has(r))) return 9;
+  for (let high = 14; high >= 10; high--) {
+    let ok = true;
+    for (let i = 0; i < 5; i++) {
+      if (!set.has(high - i)) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return high;
+  }
+  return null;
+}
+
+export function evaluateFiveShortDeck(cards: Card[]): HandScore {
+  if (cards.length !== 5) throw new Error("Need 5 cards");
+  const ranks = cards.map((c) => c.r).sort((a, b) => b - a);
+  const flush = cards.every((c) => c.s === cards[0]!.s);
+  const sHigh = straightHighShort(ranks);
+  const counts = new Map<number, number>();
+  for (const r of ranks) counts.set(r, (counts.get(r) || 0) + 1);
+  const byCount = [...counts.entries()].sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return b[0] - a[0];
+  });
+
+  if (flush && sHigh != null) return [SHORT_CAT.straightFlush, sHigh];
+  if (byCount[0]![1] === 4) {
+    const quad = byCount[0]![0];
+    const kicker = byCount.find((x) => x[0] !== quad)![0];
+    return [SHORT_CAT.quads, quad, kicker];
+  }
+  // Flush beats full house in short deck
+  if (flush) return [SHORT_CAT.flush, ...ranks];
+  if (byCount[0]![1] === 3 && byCount[1]?.[1] === 2) {
+    return [SHORT_CAT.fullHouse, byCount[0]![0], byCount[1]![0]];
+  }
+  if (sHigh != null) return [SHORT_CAT.straight, sHigh];
+  if (byCount[0]![1] === 3) {
+    const trip = byCount[0]![0];
+    const kickers = byCount.filter((x) => x[0] !== trip).map((x) => x[0]);
+    return [SHORT_CAT.trips, trip, ...kickers];
+  }
+  if (byCount[0]![1] === 2 && byCount[1]?.[1] === 2) {
+    const hi = Math.max(byCount[0]![0], byCount[1]![0]);
+    const lo = Math.min(byCount[0]![0], byCount[1]![0]);
+    const kicker = byCount.find((x) => x[1] === 1)![0];
+    return [SHORT_CAT.twoPair, hi, lo, kicker];
+  }
+  if (byCount[0]![1] === 2) {
+    const pair = byCount[0]![0];
+    const kickers = byCount.filter((x) => x[0] !== pair).map((x) => x[0]);
+    return [SHORT_CAT.pair, pair, ...kickers];
+  }
+  return [SHORT_CAT.high, ...ranks];
+}
+
+function bestFromCombos(
+  combos: Card[][],
+  scoreFn: (five: Card[]) => HandScore,
+): { score: HandScore; cards: Card[] } {
+  let bestScore: HandScore | null = null;
+  let bestCards: Card[] = [];
+  for (const five of combos) {
+    const score = scoreFn(five);
+    if (!bestScore || cmpScore(score, bestScore) > 0) {
+      bestScore = score;
+      bestCards = five;
+    }
+  }
+  return { score: bestScore ?? [-1], cards: bestCards };
+}
+
 export function bestOfSeven(hole: Card[], board: Card[]): {
   score: HandScore;
   cards: Card[];
@@ -85,26 +170,81 @@ export function bestOfSeven(hole: Card[], board: Card[]): {
   if (all.length < 5) {
     return { score: [-1], cards: all };
   }
-  let bestScore: HandScore | null = null;
-  let bestCards: Card[] = [];
+  const combos: Card[][] = [];
   const n = all.length;
   for (let a = 0; a < n - 4; a++) {
     for (let b = a + 1; b < n - 3; b++) {
       for (let c = b + 1; c < n - 2; c++) {
         for (let d = c + 1; d < n - 1; d++) {
           for (let e = d + 1; e < n; e++) {
-            const five = [all[a]!, all[b]!, all[c]!, all[d]!, all[e]!];
-            const score = evaluateFive(five);
-            if (!bestScore || cmpScore(score, bestScore) > 0) {
-              bestScore = score;
-              bestCards = five;
-            }
+            combos.push([all[a]!, all[b]!, all[c]!, all[d]!, all[e]!]);
           }
         }
       }
     }
   }
-  return { score: bestScore!, cards: bestCards };
+  return bestFromCombos(combos, evaluateFive);
+}
+
+/** Omaha: exactly two hole cards + three board cards. */
+export function bestOmaha(hole: Card[], board: Card[]): {
+  score: HandScore;
+  cards: Card[];
+} {
+  if (hole.length < 2 || board.length < 3) {
+    return { score: [-1], cards: [...hole, ...board] };
+  }
+  const combos: Card[][] = [];
+  for (let i = 0; i < hole.length - 1; i++) {
+    for (let j = i + 1; j < hole.length; j++) {
+      for (let a = 0; a < board.length - 2; a++) {
+        for (let b = a + 1; b < board.length - 1; b++) {
+          for (let c = b + 1; c < board.length; c++) {
+            combos.push([
+              hole[i]!,
+              hole[j]!,
+              board[a]!,
+              board[b]!,
+              board[c]!,
+            ]);
+          }
+        }
+      }
+    }
+  }
+  return bestFromCombos(combos, evaluateFive);
+}
+
+export function bestOfSevenShortDeck(hole: Card[], board: Card[]): {
+  score: HandScore;
+  cards: Card[];
+} {
+  const all = [...hole, ...board];
+  if (all.length < 5) return { score: [-1], cards: all };
+  const combos: Card[][] = [];
+  const n = all.length;
+  for (let a = 0; a < n - 4; a++) {
+    for (let b = a + 1; b < n - 3; b++) {
+      for (let c = b + 1; c < n - 2; c++) {
+        for (let d = c + 1; d < n - 1; d++) {
+          for (let e = d + 1; e < n; e++) {
+            combos.push([all[a]!, all[b]!, all[c]!, all[d]!, all[e]!]);
+          }
+        }
+      }
+    }
+  }
+  return bestFromCombos(combos, evaluateFiveShortDeck);
+}
+
+export function bestHand(
+  hole: Card[],
+  board: Card[],
+  game: GameType = "NLH",
+): { score: HandScore; cards: Card[] } {
+  if (isOmaha(game)) return bestOmaha(hole, board);
+  if (game === "SHORT_DECK") return bestOfSevenShortDeck(hole, board);
+  return bestOfSeven(hole, board);
 }
 
 export function cmpScore(a: HandScore, b: HandScore): number {
@@ -171,6 +311,18 @@ export function handName(score: HandScore): string {
 export function usesBothHoleCards(hole: Card[], five: Card[]): boolean {
   const fiveIds = new Set(five.map((c) => `${c.r}-${c.s}`));
   return hole.every((c) => fiveIds.has(`${c.r}-${c.s}`));
+}
+
+/** NLH: both hole cards in the five. Omaha: exactly two hole cards in the five. */
+export function qualifiesBbjpHoleUse(
+  hole: Card[],
+  five: Card[],
+  game: GameType = "NLH",
+): boolean {
+  const fiveIds = new Set(five.map((c) => `${c.r}-${c.s}`));
+  const used = hole.filter((c) => fiveIds.has(`${c.r}-${c.s}`)).length;
+  if (isOmaha(game)) return used === 2;
+  return used === hole.length && hole.length >= 2;
 }
 
 export { CAT, uniqueSortedRanks };

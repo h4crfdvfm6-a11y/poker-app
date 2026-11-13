@@ -22,6 +22,15 @@ export function freshDeck(): Card[] {
   return deck;
 }
 
+/** Short Deck / 6+ : remove 2–5 (36-card deck). */
+export function shortDeck(): Card[] {
+  const deck: Card[] = [];
+  for (let s = 0; s < 4; s++) {
+    for (let r = 6; r <= 14; r++) deck.push({ r, s });
+  }
+  return deck;
+}
+
 export function shuffle<T>(arr: T[], rnd: () => number = Math.random): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {

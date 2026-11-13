@@ -28,6 +28,7 @@ type Member = {
 type Table = {
   id: string;
   title: string;
+  game_type?: string;
   sb: string | number;
   bb: string | number;
   seats: number;
@@ -83,7 +84,8 @@ export default function AdminPage() {
   const [sendAmount, setSendAmount] = useState("1000");
 
   const [tableForm, setTableForm] = useState({
-    title: "NLH 25/50",
+    title: "",
+    gameType: "NLH",
     sb: "25",
     bb: "50",
     seats: "6",
@@ -200,6 +202,7 @@ export default function AdminPage() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         title: tableForm.title,
+        gameType: tableForm.gameType,
         sb: Number(tableForm.sb),
         bb: Number(tableForm.bb),
         seats: Number(tableForm.seats),
@@ -462,9 +465,25 @@ export default function AdminPage() {
           <form onSubmit={openTable} className="panel grid gap-3 p-4">
             <h2 className="brand text-xl">Open table</h2>
             <div>
-              <label className="label">Title</label>
+              <label className="label">Game</label>
+              <select
+                className="field"
+                value={tableForm.gameType}
+                onChange={(e) =>
+                  setTableForm((s) => ({ ...s, gameType: e.target.value }))
+                }
+              >
+                <option value="NLH">No-Limit Hold&apos;em</option>
+                <option value="PLO">Pot-Limit Omaha (4)</option>
+                <option value="PLO5">Pot-Limit Omaha 5</option>
+                <option value="SHORT_DECK">Short Deck (6+)</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Title (optional)</label>
               <input
                 className="field"
+                placeholder="Auto from game + blinds"
                 value={tableForm.title}
                 onChange={(e) =>
                   setTableForm((s) => ({ ...s, title: e.target.value }))
@@ -584,7 +603,8 @@ export default function AdminPage() {
                   <span className="chip">{t.status}</span>
                 </div>
                 <p className="text-sm text-[var(--muted)]">
-                  {money(t.sb)}/{money(t.bb)} · {t.seats}-max
+                  {t.game_type || "NLH"} · {money(t.sb)}/{money(t.bb)} ·{" "}
+                  {t.seats}-max
                 </p>
                 <p className="text-sm text-[var(--gold)]">
                   Rake {Number(t.rake_percent)}% / {Number(t.rake_cap_bb)} BB

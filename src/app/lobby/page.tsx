@@ -8,6 +8,7 @@ type LobbyData = {
   tables: Array<{
     id: string;
     title: string;
+    game_type?: string;
     sb: string | number;
     bb: string | number;
     seats: number;
@@ -197,8 +198,8 @@ export default function LobbyPage() {
                   <span className="chip">{t.seats}-max</span>
                 </div>
                 <p className="text-sm text-[var(--muted)]">
-                  Blinds {money(t.sb)}/{money(t.bb)} · Buy-in {money(t.buyin_min)}–
-                  {money(t.buyin_max)}
+                  {t.game_type || "NLH"} · Blinds {money(t.sb)}/{money(t.bb)} ·
+                  Buy-in {money(t.buyin_min)}–{money(t.buyin_max)}
                 </p>
                 <p className="mt-1 text-sm text-[var(--gold)]">
                   Rake {Number(t.rake_percent)}% / cap {Number(t.rake_cap_bb)} BB

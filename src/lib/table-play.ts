@@ -13,12 +13,14 @@ import {
   applyAction,
   botDecision,
   nextButton,
+  potLimitMaxTo,
   publicPot,
   serializeCards,
   startHand,
   type ActionType,
   type EngineState,
 } from "./poker/engine";
+import { isGameType, isPotLimit, type GameType } from "./poker/variants";
 import { cardId } from "./poker/cards";
 import {
   getTournamentByTable,
@@ -51,6 +53,7 @@ export type TableRow = {
   is_private: boolean;
   status: string;
   format: string;
+  game_type: string;
 };
 
 async function ensureRuntime(tableId: string) {
@@ -362,6 +365,7 @@ export async function getTableView(
       rakeCapBb: num(refreshed.rake_cap_bb),
       bbjpEnabled: refreshed.bbjp_enabled,
       format: refreshed.format,
+      gameType: refreshed.game_type || "NLH",
       status: refreshed.status,
     },
     tournament: tournament
@@ -494,6 +498,7 @@ async function beginNextHand(tableId: string) {
       rakeCapBb: isTournament ? 0 : num(table.rake_cap_bb),
       bbjpEnabled: !isTournament && Boolean(table.bbjp_enabled) && bbjp.enabled,
       bbjpTrigger: bbjp.trigger_hand,
+      gameType: (isGameType(table.game_type) ? table.game_type : "NLH") as GameType,
     },
   );
 
@@ -735,17 +740,22 @@ export function legalActions(state: EngineState, seatNo: number): {
   }
 
   let sizing: SizingInfo | null = null;
-  const maxTo = seat.bet + seat.stack;
+  const stackMax = seat.bet + seat.stack;
+  const maxTo = isPotLimit(state.gameType)
+    ? Math.min(stackMax, potLimitMaxTo(state, seatNo))
+    : stackMax;
   if (seat.stack > toCall) {
     if (state.currentBet === 0) {
       const min = Math.min(maxTo, seat.bet + state.bb);
-      sizing = {
-        kind: "bet",
-        min,
-        max: maxTo,
-        presets: uniquePresets(min, maxTo, state.bb, publicPot(state)),
-      };
-      actions.push({ type: "bet", label: `Bet ${min}`, amount: min });
+      if (min <= maxTo) {
+        sizing = {
+          kind: "bet",
+          min,
+          max: maxTo,
+          presets: uniquePresets(min, maxTo, state.bb, publicPot(state)),
+        };
+        actions.push({ type: "bet", label: `Bet ${min}`, amount: min });
+      }
     } else {
       const minTo = state.currentBet + state.minRaise;
       if (minTo <= maxTo) {
@@ -758,7 +768,8 @@ export function legalActions(state: EngineState, seatNo: number): {
         actions.push({ type: "raise", label: `Raise to ${minTo}`, amount: minTo });
       }
     }
-    actions.push({ type: "allin", label: `All-in ${maxTo}`, amount: maxTo });
+    // All-in always allowed for remaining stack (may exceed pot-limit).
+    actions.push({ type: "allin", label: `All-in ${stackMax}`, amount: stackMax });
   }
   return { actions, sizing };
 }
