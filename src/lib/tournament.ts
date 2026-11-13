@@ -87,19 +87,7 @@ export async function startTournament(tournamentId: string) {
     throw new Error("Tournament already started or finished");
   }
 
-  const entries = await sql<{
-    member_id: string;
-    display_name: string;
-  }>(
-    `select te.member_id, m.display_name
-     from tournament_entries te
-     join members m on m.id = te.member_id
-     where te.tournament_id = $1
-     order by te.registered_at asc`,
-    [tournamentId],
-  );
-
-  if (entries.length < 2 || entries.length > 9) {
+  const abortStart = async () => {
     await sql(
       `update tournaments
        set status = 'scheduled',
@@ -110,55 +98,83 @@ export async function startTournament(tournamentId: string) {
        where id = $1 and status = 'running' and table_id is null`,
       [tournamentId],
     );
-    if (entries.length < 2) {
-      throw new Error("Need at least 2 registered players to start");
-    }
-    throw new Error("Single-table start supports up to 9 players");
-  }
+    await sql(`delete from table_runtime where table_id = $1`, [tableId]);
+    await sql(`delete from table_seats where table_id = $1`, [tableId]);
+    await sql(`delete from cash_tables where id = $1`, [tableId]);
+  };
 
-  const seats = entries.length;
-  const prizePool = num(tournament.buy_in) * entries.length;
-
-  await sql(
-    `insert into cash_tables (
-      id, club_id, title, game_type, format, sb, bb, seats,
-      buyin_min, buyin_max, rake_percent, rake_cap_bb, bbjp_enabled, is_private, status
-    ) values ($1,$2,$3,'NLH','tournament',$4,$5,$6,$7,$7,0,0,false,false,'open')`,
-    [
-      tableId,
-      DEFAULT_CLUB_ID,
-      `${tournament.title} · final table`,
-      sb,
-      bb,
-      seats,
-      stack,
-    ],
-  );
-
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i]!;
-    await sql(
-      `insert into table_seats (table_id, seat_no, member_id, display_name, stack, is_bot, sitting_out)
-       values ($1,$2,$3,$4,$5,false,false)`,
-      [tableId, i, entry.member_id, entry.display_name, stack],
+  try {
+    const entries = await sql<{
+      member_id: string;
+      display_name: string;
+    }>(
+      `select te.member_id, m.display_name
+       from tournament_entries te
+       join members m on m.id = te.member_id
+       where te.tournament_id = $1
+       order by te.registered_at asc`,
+      [tournamentId],
     );
+
+    if (entries.length < 2 || entries.length > 9) {
+      await abortStart();
+      if (entries.length < 2) {
+        throw new Error("Need at least 2 registered players to start");
+      }
+      throw new Error("Single-table start supports up to 9 players");
+    }
+
+    const seats = entries.length;
+    const prizePool = num(tournament.buy_in) * entries.length;
+
+    await sql(
+      `insert into cash_tables (
+        id, club_id, title, game_type, format, sb, bb, seats,
+        buyin_min, buyin_max, rake_percent, rake_cap_bb, bbjp_enabled, is_private, status
+      ) values ($1,$2,$3,'NLH','tournament',$4,$5,$6,$7,$7,0,0,false,false,'open')`,
+      [
+        tableId,
+        DEFAULT_CLUB_ID,
+        `${tournament.title} · final table`,
+        sb,
+        bb,
+        seats,
+        stack,
+      ],
+    );
+
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]!;
+      await sql(
+        `insert into table_seats (table_id, seat_no, member_id, display_name, stack, is_bot, sitting_out)
+         values ($1,$2,$3,$4,$5,false,false)`,
+        [tableId, i, entry.member_id, entry.display_name, stack],
+      );
+    }
+
+    await sql(
+      `insert into table_runtime (table_id, hand_no, button_seat, version, phase, state_json)
+       values ($1, 0, 0, 0, 'waiting', '{}')`,
+      [tableId],
+    );
+
+    const linked = await sql(
+      `update tournaments
+       set table_id = $2, prize_pool = $3
+       where id = $1 and status = 'running' and table_id is null
+       returning id`,
+      [tournamentId, tableId, prizePool],
+    );
+    if (!linked.length) {
+      throw new Error("Tournament already started or finished");
+    }
+
+    const rows = await listTournaments();
+    return rows.find((t) => t.id === tournamentId)!;
+  } catch (error) {
+    await abortStart().catch(() => undefined);
+    throw error;
   }
-
-  await sql(
-    `insert into table_runtime (table_id, hand_no, button_seat, version, phase, state_json)
-     values ($1, 0, 0, 0, 'waiting', '{}')`,
-    [tableId],
-  );
-
-  await sql(
-    `update tournaments
-     set table_id = $2, prize_pool = $3
-     where id = $1 and status = 'running'`,
-    [tournamentId, tableId, prizePool],
-  );
-
-  const rows = await listTournaments();
-  return rows.find((t) => t.id === tournamentId)!;
 }
 
 export async function maybeAdvanceTournamentBlinds(tableId: string) {
