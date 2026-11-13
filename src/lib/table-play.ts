@@ -40,6 +40,7 @@ export type TableRow = {
   rake_percent: string | number;
   rake_cap_bb: string | number;
   bbjp_enabled: boolean;
+  is_private: boolean;
   status: string;
   format: string;
 };
@@ -257,6 +258,12 @@ export async function getTableView(
   const table = await getTable(tableId, finished);
   await ensureRuntime(tableId);
   let seats = await getSeats(tableId);
+  const viewerSeatedEarly = Boolean(
+    viewerMemberId && seats.some((s) => s.member_id === viewerMemberId),
+  );
+  if (table.is_private && !opts.advance && !viewerSeatedEarly && !viewerMemberId) {
+    throw new Error("Private table — join the club first");
+  }
   if (seats.length !== table.seats) {
     for (let i = 0; i < table.seats; i++) {
       await sql(

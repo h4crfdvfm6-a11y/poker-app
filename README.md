@@ -14,16 +14,22 @@ Free club poker platform for Android and iPhone (web + future store wrap).
 
 ```bash
 npm install
+export ADMIN_PIN='your-admin-pin'
+export SESSION_SECRET='long-random-string'
+export CLUB_INVITE='your-invite'
 env -u DATABASE_URL npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000)
 
-- Lobby: `/lobby`
-- Admin: `/admin`
-- Default invite: `FAPOKER`
-- Default admin PIN: `FAADMIN` (override with `ADMIN_PIN`)
-- Optional `SESSION_SECRET` for signed session cookies (falls back to `ADMIN_PIN`)
+- Lobby: `/lobby` (use your `CLUB_INVITE`)
+- Admin: `/admin` (use your `ADMIN_PIN`)
+
+Required environment variables:
+
+- `ADMIN_PIN` — club admin login
+- `SESSION_SECRET` — signs session cookies (a random value is used for the process if unset; set this in production)
+- `CLUB_INVITE` — club invite code (if unset on first boot, a random code is generated and shown in Admin)
 
 ## Stack
 

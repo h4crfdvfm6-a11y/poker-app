@@ -1,9 +1,18 @@
+import { randomBytes } from "node:crypto";
 import { sql } from "./db";
 import { id } from "./ids";
 
 export const DEFAULT_CLUB_ID = "club_fa_poker";
-export const DEFAULT_INVITE = "FAPOKER";
-export const DEFAULT_ADMIN_PIN = "FAADMIN";
+const MAX_CLUB_MEMBERS = 48;
+const MAX_JOINS_PER_WINDOW = 12;
+const JOIN_WINDOW_MINUTES = 30;
+const WELCOME_CHIPS = 2500;
+
+function clubInviteCode(): string {
+  const fromEnv = process.env.CLUB_INVITE?.trim();
+  if (fromEnv) return fromEnv.slice(0, 32);
+  return randomBytes(4).toString("hex").toUpperCase();
+}
 
 export type Member = {
   id: string;
@@ -63,7 +72,7 @@ export async function ensureClubSeeded() {
 
   await sql(
     "insert into clubs (id, name, invite_code) values ($1, $2, $3)",
-    [DEFAULT_CLUB_ID, "FA Poker Club", DEFAULT_INVITE],
+    [DEFAULT_CLUB_ID, "FA Poker Club", clubInviteCode()],
   );
   await sql(
     "insert into bbjp_settings (club_id, balance, enabled, trigger_hand) values ($1, 0, false, $2)",
@@ -93,6 +102,13 @@ export function num(v: string | number): number {
 
 export async function getOverview(clubId = DEFAULT_CLUB_ID) {
   await ensureClubSeeded();
+  const envInvite = process.env.CLUB_INVITE?.trim();
+  if (envInvite) {
+    await sql("update clubs set invite_code = $1 where id = $2", [
+      envInvite.slice(0, 32),
+      clubId,
+    ]);
+  }
   const [club] = await sql<{ name: string; invite_code: string }>(
     "select name, invite_code from clubs where id = $1",
     [clubId],
@@ -362,12 +378,40 @@ export async function setBbjpTrigger(triggerHand: string) {
 
 export async function joinByInvite(inviteCode: string, displayName: string) {
   await ensureClubSeeded();
+  const envInvite = process.env.CLUB_INVITE?.trim();
+  if (envInvite) {
+    await sql("update clubs set invite_code = $1 where id = $2", [
+      envInvite.slice(0, 32),
+      DEFAULT_CLUB_ID,
+    ]);
+  }
   const [club] = await sql<{ id: string; invite_code: string }>(
     "select id, invite_code from clubs where upper(invite_code) = upper($1)",
     [inviteCode.trim()],
   );
   if (!club) throw new Error("Invalid club invite code");
-  return addMember(displayName, 5000);
+
+  const members = await sql<{ c: string }>(
+    `select count(*)::text as c from members
+     where club_id = $1 and role = 'player' and status = 'active'`,
+    [club.id],
+  );
+  if (Number(members[0]?.c ?? 0) >= MAX_CLUB_MEMBERS) {
+    throw new Error("Club is full");
+  }
+
+  const recent = await sql<{ c: string }>(
+    `select count(*)::text as c from members
+     where club_id = $1
+       and role = 'player'
+       and created_at > now() - ($2 || ' minutes')::interval`,
+    [club.id, String(JOIN_WINDOW_MINUTES)],
+  );
+  if (Number(recent[0]?.c ?? 0) >= MAX_JOINS_PER_WINDOW) {
+    throw new Error("Too many joins right now — try again later");
+  }
+
+  return addMember(displayName, WELCOME_CHIPS);
 }
 
 export async function getTournament(tournamentId: string) {

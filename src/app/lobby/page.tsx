@@ -43,7 +43,7 @@ export default function LobbyPage() {
   const [data, setData] = useState<LobbyData | null>(null);
   const [error, setError] = useState("");
   const [name, setName] = useState("");
-  const [invite, setInvite] = useState("FAPOKER");
+  const [invite, setInvite] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -160,13 +160,13 @@ export default function LobbyPage() {
               className="field"
               value={invite}
               onChange={(e) => setInvite(e.target.value)}
-              placeholder="FAPOKER"
+              placeholder="Club invite code"
               required
             />
           </div>
           {error ? <p className="text-sm text-[#ffb4b6]">{error}</p> : null}
           <button className="btn btn-gold" type="submit">
-            Join club · get 5,000 chips
+            Join club
           </button>
         </form>
       )}
