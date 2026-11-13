@@ -6,6 +6,7 @@ import {
   getTournament,
   listTournaments,
   num,
+  rollSpinMultiplier,
   sendChips,
   type Tournament,
 } from "./club";
@@ -143,17 +144,34 @@ export async function startTournament(tournamentId: string) {
     }
 
     const seats = entries.length;
-    const prizePool = num(tournament.buy_in) * entries.length;
+    const kind = (tournament as { kind?: string }).kind || "mtt";
+    let prizePool = num(tournament.buy_in) * entries.length;
+    let spinMult: number | null = null;
+    if (kind === "spin") {
+      spinMult = rollSpinMultiplier();
+      // Winner-take-all prize = buy-in × seats × multiplier / seats * seats = buy-in * mult * seats / something
+      // Standard: prize pool = buy_in * multiplier (for 3-max, displayed as ×N of buy-in to winner).
+      prizePool = num(tournament.buy_in) * spinMult;
+      await sql(
+        `update tournaments set spin_multiplier = $2 where id = $1`,
+        [tournamentId, spinMult],
+      );
+    }
+    const gameType =
+      (tournament as { game_type?: string }).game_type || "NLH";
 
     await sql(
       `insert into cash_tables (
         id, club_id, title, game_type, format, sb, bb, seats,
         buyin_min, buyin_max, rake_percent, rake_cap_bb, bbjp_enabled, is_private, status
-      ) values ($1,$2,$3,'NLH','tournament',$4,$5,$6,$7,$7,0,0,false,false,'open')`,
+      ) values ($1,$2,$3,$4,'tournament',$5,$6,$7,$8,$8,0,0,false,false,'open')`,
       [
         tableId,
         DEFAULT_CLUB_ID,
-        `${tournament.title} · final table`,
+        spinMult
+          ? `${tournament.title} · ×${spinMult}`
+          : `${tournament.title} · final table`,
+        gameType,
         sb,
         bb,
         seats,

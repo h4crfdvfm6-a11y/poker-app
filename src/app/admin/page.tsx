@@ -105,6 +105,7 @@ export default function AdminPage() {
     startingStack: "10000",
     maxPlayers: "9",
     blindMinutes: "5",
+    kind: "mtt",
   });
   const [mttBusy, setMttBusy] = useState(false);
 
@@ -264,6 +265,7 @@ export default function AdminPage() {
         startingStack: Number(mttForm.startingStack),
         maxPlayers: Number(mttForm.maxPlayers),
         blindMinutes: Number(mttForm.blindMinutes),
+        kind: mttForm.kind,
       }),
     });
     const json = await res.json();
@@ -694,6 +696,32 @@ export default function AdminPage() {
         <section className="grid gap-4">
           <form onSubmit={createMtt} className="panel grid gap-3 p-4">
             <h2 className="brand text-xl">Create tournament</h2>
+            <div>
+              <label className="label">Format</label>
+              <select
+                className="field"
+                value={mttForm.kind}
+                onChange={(e) =>
+                  setMttForm((s) => ({
+                    ...s,
+                    kind: e.target.value,
+                    title:
+                      e.target.value === "spin"
+                        ? "Spin & Gold"
+                        : s.title === "Spin & Gold"
+                          ? "Tuesday League"
+                          : s.title,
+                    maxPlayers: e.target.value === "spin" ? "3" : s.maxPlayers,
+                    startingStack:
+                      e.target.value === "spin" ? "500" : s.startingStack,
+                    blindMinutes: e.target.value === "spin" ? "1" : s.blindMinutes,
+                  }))
+                }
+              >
+                <option value="mtt">MTT / Sit &amp; Go</option>
+                <option value="spin">Spin &amp; Gold (3-max)</option>
+              </select>
+            </div>
             <div>
               <label className="label">Title</label>
               <input

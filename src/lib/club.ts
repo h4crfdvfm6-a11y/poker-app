@@ -67,6 +67,9 @@ export type Tournament = {
   level_started_at?: string | null;
   prize_pool?: string | number;
   winner_member_id?: string | null;
+  kind?: string;
+  spin_multiplier?: string | number | null;
+  game_type?: string;
 };
 
 export async function ensureClubSeeded() {
@@ -403,27 +406,59 @@ export async function createTournament(input: {
   maxPlayers: number;
   blindMinutes: number;
   startsAt?: string | null;
+  kind?: "mtt" | "spin";
+  gameType?: string;
 }) {
   await ensureClubSeeded();
-  const tournamentId = id("mtt");
+  await sql(
+    `alter table tournaments add column if not exists kind text not null default 'mtt'`,
+  );
+  await sql(
+    `alter table tournaments add column if not exists spin_multiplier numeric(10, 2)`,
+  );
+  await sql(
+    `alter table tournaments add column if not exists game_type text not null default 'NLH'`,
+  );
+  const kind = input.kind === "spin" ? "spin" : "mtt";
+  const maxPlayers = kind === "spin" ? 3 : input.maxPlayers;
+  const startingStack = kind === "spin" ? Math.min(input.startingStack, 500) : input.startingStack;
+  const blindMinutes = kind === "spin" ? 1 : input.blindMinutes;
+  const title =
+    input.title.trim() ||
+    (kind === "spin" ? `Spin & Gold ${input.buyIn}` : "Club MTT");
+  const tournamentId = id(kind === "spin" ? "spin" : "mtt");
   await sql(
     `insert into tournaments (
-      id, club_id, title, buy_in, fee, starting_stack, max_players, blind_minutes, status, starts_at
-    ) values ($1,$2,$3,$4,$5,$6,$7,$8,'scheduled',$9)`,
+      id, club_id, title, buy_in, fee, starting_stack, max_players, blind_minutes,
+      status, starts_at, kind, game_type
+    ) values ($1,$2,$3,$4,$5,$6,$7,$8,'scheduled',$9,$10,$11)`,
     [
       tournamentId,
       DEFAULT_CLUB_ID,
-      input.title.trim(),
+      title,
       input.buyIn,
       input.fee,
-      input.startingStack,
-      input.maxPlayers,
-      input.blindMinutes,
+      startingStack,
+      maxPlayers,
+      blindMinutes,
       input.startsAt || null,
+      kind,
+      isGameType(input.gameType ?? "NLH") ? input.gameType : "NLH",
     ],
   );
   const rows = await listTournaments();
   return rows.find((t) => t.id === tournamentId)!;
+}
+
+/** Weighted Spin & Gold style multipliers (club chips prize = buy_in * 3 * mult / 3 for winner-take-most). */
+export function rollSpinMultiplier(): number {
+  const roll = Math.random();
+  if (roll < 0.55) return 2;
+  if (roll < 0.8) return 3;
+  if (roll < 0.92) return 5;
+  if (roll < 0.97) return 10;
+  if (roll < 0.995) return 25;
+  return 100;
 }
 
 export async function getBbjp(clubId = DEFAULT_CLUB_ID) {
@@ -653,7 +688,15 @@ export async function registerForTournament(tournamentId: string, memberId: stri
     );
   }
 
-  return getTournament(tournamentId);
+  const updated = await getTournament(tournamentId);
+  if (
+    (updated as { kind?: string }).kind === "spin" &&
+    Number(updated.entries ?? 0) >= updated.max_players
+  ) {
+    const { startTournament } = await import("./tournament");
+    return startTournament(tournamentId);
+  }
+  return updated;
 }
 
 export async function unregisterFromTournament(
