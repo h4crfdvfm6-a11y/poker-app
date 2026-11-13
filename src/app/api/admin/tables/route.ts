@@ -25,6 +25,8 @@ export async function POST(request: Request) {
     rakeCapBb?: number;
     bbjpEnabled?: boolean;
     isPrivate?: boolean;
+    squidEnabled?: boolean;
+    squidTarget?: number;
   };
   try {
     const table = await createTable({
@@ -39,6 +41,8 @@ export async function POST(request: Request) {
       rakeCapBb: Number(body.rakeCapBb ?? 3),
       bbjpEnabled: Boolean(body.bbjpEnabled),
       isPrivate: Boolean(body.isPrivate),
+      squidEnabled: Boolean(body.squidEnabled),
+      squidTarget: Number(body.squidTarget ?? 3),
     });
     return Response.json({ table });
   } catch (error) {

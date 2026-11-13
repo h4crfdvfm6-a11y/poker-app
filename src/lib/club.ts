@@ -47,6 +47,8 @@ export type CashTable = {
   is_private: boolean;
   status: string;
   created_at: string;
+  squid_enabled?: boolean;
+  squid_target?: number;
 };
 
 export type Tournament = {
@@ -335,11 +337,21 @@ export async function createTable(input: {
   rakeCapBb: number;
   bbjpEnabled: boolean;
   isPrivate: boolean;
+  squidEnabled?: boolean;
+  squidTarget?: number;
 }) {
   await ensureClubSeeded();
   if (input.rakePercent < 0 || input.rakePercent > 20) {
     throw new Error("Rake percent must be between 0 and 20");
   }
+  await sql(
+    `alter table cash_tables
+     add column if not exists squid_enabled boolean not null default false`,
+  );
+  await sql(
+    `alter table cash_tables
+     add column if not exists squid_target int not null default 3`,
+  );
   const gameType: GameType = isGameType(input.gameType ?? "NLH")
     ? (input.gameType as GameType)
     : "NLH";
@@ -347,14 +359,16 @@ export async function createTable(input: {
   const maxSeats =
     gameType === "PLO6" ? 6 : gameType === "PLO5" ? 7 : gameType === "SHORT_DECK" ? 6 : 9;
   const seats = Math.max(2, Math.min(maxSeats, Math.floor(input.seats) || 6));
+  const squidTarget = Math.max(1, Math.min(9, Math.floor(input.squidTarget ?? 3) || 3));
   const tableId = id("tbl");
   const title =
     input.title.trim() || `${gameTypeLabel(gameType)} ${input.sb}/${input.bb}`;
   await sql(
     `insert into cash_tables (
       id, club_id, title, game_type, format, sb, bb, seats,
-      buyin_min, buyin_max, rake_percent, rake_cap_bb, bbjp_enabled, is_private, status
-    ) values ($1,$2,$3,$4,'ring',$5,$6,$7,$8,$9,$10,$11,$12,$13,'open')`,
+      buyin_min, buyin_max, rake_percent, rake_cap_bb, bbjp_enabled, is_private,
+      squid_enabled, squid_target, status
+    ) values ($1,$2,$3,$4,'ring',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'open')`,
     [
       tableId,
       DEFAULT_CLUB_ID,
@@ -369,6 +383,8 @@ export async function createTable(input: {
       input.rakeCapBb,
       input.bbjpEnabled,
       input.isPrivate,
+      Boolean(input.squidEnabled),
+      squidTarget,
     ],
   );
   const [table] = await sql<CashTable>("select * from cash_tables where id = $1", [
@@ -447,6 +463,29 @@ export async function closeTable(tableId: string) {
     }
   }
 
+  // Return any unfinished squid pot to the club AI float.
+  if (runtime) {
+    try {
+      await sql(
+        `alter table table_runtime
+         add column if not exists squid_json text not null default '{}'`,
+      );
+      const squidRows = await sql<{ squid_json: string }>(
+        `select squid_json from table_runtime where table_id = $1`,
+        [tableId],
+      );
+      const squid = JSON.parse(squidRows[0]?.squid_json || "{}") as {
+        pot?: number;
+      };
+      const pot = Math.max(0, Number(squid.pot || 0));
+      if (pot > 0) {
+        await creditBotFloat(pot, `table_close_squid:${tableId}`);
+      }
+    } catch {
+      /* ignore bad squid_json */
+    }
+  }
+
   await sql(
     `update table_seats
      set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
@@ -458,6 +497,7 @@ export async function closeTable(tableId: string) {
       `update table_runtime
        set phase = 'waiting',
            state_json = '{}',
+           squid_json = '{}',
            version = version + 1,
            updated_at = now()
        where table_id = $1`,

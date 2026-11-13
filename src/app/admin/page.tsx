@@ -36,6 +36,8 @@ type Table = {
   rake_percent: string | number;
   rake_cap_bb: string | number;
   bbjp_enabled: boolean;
+  squid_enabled?: boolean;
+  squid_target?: number;
   status: string;
 };
 
@@ -96,6 +98,8 @@ export default function AdminPage() {
     rakeCapBb: "3",
     bbjpEnabled: true,
     isPrivate: false,
+    squidEnabled: false,
+    squidTarget: "3",
   });
 
   const [mttForm, setMttForm] = useState({
@@ -234,6 +238,8 @@ export default function AdminPage() {
         rakeCapBb: Number(tableForm.rakeCapBb),
         bbjpEnabled: tableForm.bbjpEnabled,
         isPrivate: tableForm.isPrivate,
+        squidEnabled: tableForm.squidEnabled,
+        squidTarget: Number(tableForm.squidTarget),
       }),
     });
     const json = await res.json();
@@ -657,6 +663,37 @@ export default function AdminPage() {
                 />
                 BBJP on this table
               </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={tableForm.squidEnabled}
+                  onChange={(e) =>
+                    setTableForm((s) => ({
+                      ...s,
+                      squidEnabled: e.target.checked,
+                    }))
+                  }
+                />
+                Squid game (1 BB ante)
+              </label>
+              {tableForm.squidEnabled ? (
+                <div>
+                  <label className="label">Squid target</label>
+                  <input
+                    className="field"
+                    type="number"
+                    min={1}
+                    max={9}
+                    value={tableForm.squidTarget}
+                    onChange={(e) =>
+                      setTableForm((s) => ({
+                        ...s,
+                        squidTarget: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              ) : null}
             </div>
             <button className="btn btn-gold" type="submit">
               Create table with rake
@@ -677,6 +714,9 @@ export default function AdminPage() {
                 <p className="text-sm text-[var(--gold)]">
                   Rake {Number(t.rake_percent)}% / {Number(t.rake_cap_bb)} BB
                   {t.bbjp_enabled ? " · BBJP" : ""}
+                  {t.squid_enabled
+                    ? ` · Squid ${t.squid_target || 3}`
+                    : ""}
                 </p>
                 {t.status === "open" ? (
                   <button

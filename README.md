@@ -5,10 +5,13 @@ Free club poker platform for Android and iPhone (web + future store wrap).
 ## What’s in this MVP
 
 - **Player lobby** — join with invite code, see tables, tournaments, BBJP
-- **Admin panel** (PIN) — add players, send/recall chips, open tables **with rake**, create tournaments, fund/enable BBJP
-- **Live tables** — sit with buy-in, play NLH vs players/AI, automatic rake, BBJP fee + trigger payouts
-- **Tournaments** — register from the lobby; admin starts a single table (up to 9); blinds rise on a timer; winner takes the prize pool in club chips
-- **Club chips only** — free play, not real-money gambling
+- **Admin panel** (PIN) — add players, send chips/gems, open tables **with rake**, Spin & Gold / MTT, fund BBJP + AI float
+- **Game variants** — NLH, PLO/PLO5/PLO6, PLO Hi-Lo, Short Deck, All-in or Fold, Bomb Pot
+- **Live tables** — sit with buy-in, play vs players/AI, automatic rake, BBJP ladder, optional Squid side pot
+- **Shop** (`/shop`) — gems buy chip packs and cosmetics (not redeemable for cash)
+- **Coach** (`/coach`) — offline practice tips (separate from live cash)
+- **Tournaments** — lobby register; admin starts table; Spin & Gold 3-max with multiplier
+- **Club chips only** — free social play, not real-money gambling
 
 ## Quick start
 

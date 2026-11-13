@@ -63,9 +63,30 @@ export type TableRow = {
   status: string;
   format: string;
   game_type: string;
+  squid_enabled?: boolean;
+  squid_target?: number;
+};
+
+export type SquidRuntime = {
+  pot: number;
+  scores: Record<string, number>;
+  target: number;
+  lastEvent: string | null;
 };
 
 async function ensureRuntime(tableId: string) {
+  await sql(
+    `alter table table_runtime
+     add column if not exists squid_json text not null default '{}'`,
+  );
+  await sql(
+    `alter table cash_tables
+     add column if not exists squid_enabled boolean not null default false`,
+  );
+  await sql(
+    `alter table cash_tables
+     add column if not exists squid_target int not null default 3`,
+  );
   const rows = await sql("select table_id from table_runtime where table_id = $1", [
     tableId,
   ]);
@@ -92,6 +113,81 @@ async function getSeats(tableId: string) {
     `select * from table_seats where table_id = $1 order by seat_no asc`,
     [tableId],
   );
+}
+
+async function readSquid(tableId: string, target = 3): Promise<SquidRuntime> {
+  await ensureRuntime(tableId);
+  const [row] = await sql<{ squid_json: string }>(
+    `select squid_json from table_runtime where table_id = $1`,
+    [tableId],
+  );
+  try {
+    const parsed = JSON.parse(row?.squid_json || "{}") as Partial<SquidRuntime>;
+    return {
+      pot: Number(parsed.pot || 0),
+      scores: parsed.scores && typeof parsed.scores === "object" ? parsed.scores : {},
+      target: Number(parsed.target || target) || target,
+      lastEvent: parsed.lastEvent ?? null,
+    };
+  } catch {
+    return { pot: 0, scores: {}, target, lastEvent: null };
+  }
+}
+
+async function writeSquid(tableId: string, squid: SquidRuntime) {
+  await sql(
+    `update table_runtime set squid_json = $2, updated_at = now() where table_id = $1`,
+    [tableId, JSON.stringify(squid)],
+  );
+}
+
+/** Collect 1 BB squid ante from each dealt-in seat into the squid pot. */
+function collectSquidAntes(
+  state: EngineState,
+  squid: SquidRuntime,
+  ante: number,
+): SquidRuntime {
+  let pot = squid.pot;
+  for (const seat of state.seats) {
+    if (!seat.hole.length || seat.sittingOut) continue;
+    const pay = Math.min(seat.stack, ante);
+    if (pay <= 0) continue;
+    seat.stack -= pay;
+    pot += pay;
+  }
+  return { ...squid, pot, lastEvent: `Squid ante ${ante}` };
+}
+
+/** Award a squid to the main-pot winner; pay pot when target is reached. */
+function awardSquid(
+  state: EngineState,
+  squid: SquidRuntime,
+): SquidRuntime {
+  if (!state.result?.winners?.length) return squid;
+  const winnerSeat = state.result.winners[0]!.seat;
+  const winner = state.seats.find((s) => s.seat === winnerSeat);
+  if (!winner?.memberId) return squid;
+  const scores = { ...squid.scores };
+  scores[winner.memberId] = (scores[winner.memberId] || 0) + 1;
+  const count = scores[winner.memberId]!;
+  if (count >= squid.target && squid.pot > 0) {
+    winner.stack += squid.pot;
+    state.log.push(
+      `${winner.name} wins squid pot ${squid.pot} (${count}/${squid.target})`,
+    );
+    return {
+      pot: 0,
+      scores: {},
+      target: squid.target,
+      lastEvent: `${winner.name} claimed squid pot`,
+    };
+  }
+  state.log.push(`${winner.name} earns a squid (${count}/${squid.target})`);
+  return {
+    ...squid,
+    scores,
+    lastEvent: `${winner.name} squid ${count}/${squid.target}`,
+  };
 }
 
 async function readRuntime(tableId: string) {
@@ -416,7 +512,12 @@ export async function getTableView(
       format: refreshed.format,
       gameType: refreshed.game_type || "NLH",
       status: refreshed.status,
+      squidEnabled: Boolean(refreshed.squid_enabled),
+      squidTarget: Number(refreshed.squid_target || 3),
     },
+    squid: refreshed.squid_enabled
+      ? await readSquid(tableId, Number(refreshed.squid_target || 3))
+      : null,
     tournament: tournament
       ? {
           id: tournament.id,
@@ -490,6 +591,16 @@ async function maybeRunBots(
       decision.type,
       decision.amount ?? 0,
     );
+    if (next.street === "showdown") {
+      const table = await getTable(tableId, true);
+      if (table.squid_enabled && table.format !== "tournament") {
+        const squid = awardSquid(
+          next,
+          await readSquid(tableId, Number(table.squid_target || 3)),
+        );
+        await writeSquid(tableId, squid);
+      }
+    }
     const version = current.version + 1;
     const wrote = await writeRuntime(tableId, {
       phase: next.street === "showdown" ? "showdown" : "hand",
@@ -577,6 +688,11 @@ async function beginNextHand(tableId: string) {
     },
   );
 
+  let squid = await readSquid(tableId, Number(table.squid_target || 3));
+  if (!isTournament && table.squid_enabled && state.street !== "waiting") {
+    squid = collectSquidAntes(state, squid, num(table.bb));
+  }
+
   const phase =
     state.street === "waiting"
       ? "waiting"
@@ -591,6 +707,12 @@ async function beginNextHand(tableId: string) {
     version: runtime.version + 1,
   });
   if (!wrote) return;
+  if (state.street === "showdown" && !isTournament && table.squid_enabled) {
+    squid = awardSquid(state, squid);
+  }
+  if (!isTournament && table.squid_enabled) {
+    await writeSquid(tableId, squid);
+  }
   if (state.street === "showdown") {
     await applyHandEconomy(tableId, state);
     await markBustedPlayers(tableId);
@@ -795,6 +917,16 @@ export async function playerAction(
   }
 
   let next = applyAction(runtime.state, seat.seat, type, amount);
+  if (next.street === "showdown") {
+    const table = await getTable(tableId, true);
+    if (table.squid_enabled && table.format !== "tournament") {
+      const squid = awardSquid(
+        next,
+        await readSquid(tableId, Number(table.squid_target || 3)),
+      );
+      await writeSquid(tableId, squid);
+    }
+  }
   const wrote = await writeRuntime(tableId, {
     phase: next.street === "showdown" ? "showdown" : "hand",
     state: next,

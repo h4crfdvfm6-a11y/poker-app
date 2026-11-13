@@ -28,6 +28,14 @@ type TableView = {
     format?: string;
     gameType?: string;
     status?: string;
+    squidEnabled?: boolean;
+    squidTarget?: number;
+  };
+  squid?: null | {
+    pot: number;
+    scores: Record<string, number>;
+    target: number;
+    lastEvent: string | null;
   };
   tournament: null | {
     id: string;
@@ -345,7 +353,7 @@ export default function TablePage() {
             {view.table.gameType || "NLH"} · {view.table.sb}/{view.table.bb}
             {isTournament
               ? ` · Level ${view.tournament?.blindLevel ?? 1} · Prize ${view.tournament?.prizePool?.toLocaleString() ?? 0}`
-              : ` · Rake ${view.table.rakePercent}% / ${view.table.rakeCapBb}BB${view.table.bbjpEnabled ? " · BBJP" : ""}`}
+              : ` · Rake ${view.table.rakePercent}% / ${view.table.rakeCapBb}BB${view.table.bbjpEnabled ? " · BBJP" : ""}${view.table.squidEnabled ? ` · Squid ${view.table.squidTarget || 3}` : ""}`}
           </p>
         </div>
         <div className="text-right text-xs text-[var(--muted)]">
@@ -365,6 +373,12 @@ export default function TablePage() {
                   ? ` · cycle ${view.bbjp.collections.toLocaleString()}`
                   : ""}
               </div>
+              {view.squid ? (
+                <div className="mt-1 text-[var(--gold)]">
+                  Squid pot {view.squid.pot.toLocaleString()} · first to{" "}
+                  {view.squid.target}
+                </div>
+              ) : null}
               <div>{view.phase}</div>
             </>
           )}
@@ -455,6 +469,11 @@ export default function TablePage() {
                       ? "Empty"
                       : "Tap to sit"
                     : seat.stack.toLocaleString()}
+                  {!seat.empty &&
+                  seat.memberId &&
+                  view.squid?.scores?.[seat.memberId]
+                    ? ` · Sq ${view.squid.scores[seat.memberId]}/${view.squid.target}`
+                    : ""}
                 </div>
                 {live?.bet ? (
                   <div className="text-[11px] text-[var(--gold)]">Bet {live.bet}</div>

@@ -15,6 +15,8 @@ type LobbyData = {
     rake_percent: string | number;
     rake_cap_bb: string | number;
     bbjp_enabled: boolean;
+    squid_enabled?: boolean;
+    squid_target?: number;
     buyin_min: string | number;
     buyin_max: string | number;
   }>;
@@ -212,6 +214,9 @@ export default function LobbyPage() {
                 <p className="mt-1 text-sm text-[var(--gold)]">
                   Rake {Number(t.rake_percent)}% / cap {Number(t.rake_cap_bb)} BB
                   {t.bbjp_enabled ? " · BBJP on" : ""}
+                  {t.squid_enabled
+                    ? ` · Squid to ${t.squid_target || 3}`
+                    : ""}
                 </p>
                 <Link
                   href={`/table/${t.id}`}
