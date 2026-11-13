@@ -1,7 +1,7 @@
 import { Card, cardId, freshDeck, shortDeck, shuffle } from "./cards";
 import {
   bestHand,
-  cmpScore,
+  cmpHands,
   handName,
   meetsBbjpTrigger,
   qualifiesBbjpHoleUse,
@@ -279,7 +279,7 @@ function showdown(state: EngineState) {
     const best = bestHand(s.hole, state.board, state.gameType);
     return { seat: s, ...best };
   });
-  evaluated.sort((a, b) => cmpScore(b.score, a.score));
+  evaluated.sort((a, b) => cmpHands(b.score, a.score, state.gameType));
 
   const winnersOut: HandResult["winners"] = [];
   let totalRake = 0;
@@ -290,9 +290,11 @@ function showdown(state: EngineState) {
     if (!eligible.length) continue;
     let best: HandScore | null = null;
     for (const e of eligible) {
-      if (!best || cmpScore(e.score, best) > 0) best = e.score;
+      if (!best || cmpHands(e.score, best, state.gameType) > 0) best = e.score;
     }
-    const potWinners = eligible.filter((e) => cmpScore(e.score, best!) === 0);
+    const potWinners = eligible.filter(
+      (e) => cmpHands(e.score, best!, state.gameType) === 0,
+    );
     const { net, rake, bbjpFee } = takeFees(state, pot.amount);
     totalRake += rake;
     totalBbjpFee += bbjpFee;

@@ -257,7 +257,11 @@ function maskState(state: EngineState | null, viewerMemberId: string | null) {
         allIn: s.allIn,
         sittingOut: s.sittingOut,
         isBot: s.isBot,
-        hole: show ? serializeCards(s.hole) : s.hole.length ? ["xx", "xx"] : [],
+        hole: show
+          ? serializeCards(s.hole)
+          : s.hole.length
+            ? Array.from({ length: s.hole.length }, () => "xx")
+            : [],
       };
     }),
   };

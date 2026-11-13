@@ -17,13 +17,6 @@ const CAT = {
   straightFlush: 8,
 } as const;
 
-/** Short Deck: flush beats full house. */
-const SHORT_CAT = {
-  ...CAT,
-  fullHouse: 5,
-  flush: 6,
-} as const;
-
 function uniqueSortedRanks(cards: Card[]): number[] {
   return [...new Set(cards.map((c) => c.r))].sort((a, b) => b - a);
 }
@@ -103,6 +96,10 @@ function straightHighShort(ranks: number[]): number | null {
   return null;
 }
 
+/**
+ * Short-deck evaluation keeps semantic CAT values (flush=5, fullHouse=6)
+ * so BBJP / handName stay correct. Ordering uses cmpScoreShortDeck.
+ */
 export function evaluateFiveShortDeck(cards: Card[]): HandScore {
   if (cards.length !== 5) throw new Error("Need 5 cards");
   const ranks = cards.map((c) => c.r).sort((a, b) => b - a);
@@ -115,46 +112,59 @@ export function evaluateFiveShortDeck(cards: Card[]): HandScore {
     return b[0] - a[0];
   });
 
-  if (flush && sHigh != null) return [SHORT_CAT.straightFlush, sHigh];
+  if (flush && sHigh != null) return [CAT.straightFlush, sHigh];
   if (byCount[0]![1] === 4) {
     const quad = byCount[0]![0];
     const kicker = byCount.find((x) => x[0] !== quad)![0];
-    return [SHORT_CAT.quads, quad, kicker];
+    return [CAT.quads, quad, kicker];
   }
-  // Flush beats full house in short deck
-  if (flush) return [SHORT_CAT.flush, ...ranks];
+  // Prefer flush over full house when both present — ranking handled by cmpScoreShortDeck
+  if (flush) return [CAT.flush, ...ranks];
   if (byCount[0]![1] === 3 && byCount[1]?.[1] === 2) {
-    return [SHORT_CAT.fullHouse, byCount[0]![0], byCount[1]![0]];
+    return [CAT.fullHouse, byCount[0]![0], byCount[1]![0]];
   }
-  if (sHigh != null) return [SHORT_CAT.straight, sHigh];
+  if (sHigh != null) return [CAT.straight, sHigh];
   if (byCount[0]![1] === 3) {
     const trip = byCount[0]![0];
     const kickers = byCount.filter((x) => x[0] !== trip).map((x) => x[0]);
-    return [SHORT_CAT.trips, trip, ...kickers];
+    return [CAT.trips, trip, ...kickers];
   }
   if (byCount[0]![1] === 2 && byCount[1]?.[1] === 2) {
     const hi = Math.max(byCount[0]![0], byCount[1]![0]);
     const lo = Math.min(byCount[0]![0], byCount[1]![0]);
     const kicker = byCount.find((x) => x[1] === 1)![0];
-    return [SHORT_CAT.twoPair, hi, lo, kicker];
+    return [CAT.twoPair, hi, lo, kicker];
   }
   if (byCount[0]![1] === 2) {
     const pair = byCount[0]![0];
     const kickers = byCount.filter((x) => x[0] !== pair).map((x) => x[0]);
-    return [SHORT_CAT.pair, pair, ...kickers];
+    return [CAT.pair, pair, ...kickers];
   }
-  return [SHORT_CAT.high, ...ranks];
+  return [CAT.high, ...ranks];
+}
+
+function shortDeckOrder(score: HandScore): HandScore {
+  const cat = score[0] ?? -1;
+  // Flush beats full house: swap those two category ranks for comparison only.
+  if (cat === CAT.flush) return [CAT.fullHouse, ...score.slice(1)];
+  if (cat === CAT.fullHouse) return [CAT.flush, ...score.slice(1)];
+  return score;
+}
+
+export function cmpScoreShortDeck(a: HandScore, b: HandScore): number {
+  return cmpScore(shortDeckOrder(a), shortDeckOrder(b));
 }
 
 function bestFromCombos(
   combos: Card[][],
   scoreFn: (five: Card[]) => HandScore,
+  compare: (a: HandScore, b: HandScore) => number = cmpScore,
 ): { score: HandScore; cards: Card[] } {
   let bestScore: HandScore | null = null;
   let bestCards: Card[] = [];
   for (const five of combos) {
     const score = scoreFn(five);
-    if (!bestScore || cmpScore(score, bestScore) > 0) {
+    if (!bestScore || compare(score, bestScore) > 0) {
       bestScore = score;
       bestCards = five;
     }
@@ -234,7 +244,7 @@ export function bestOfSevenShortDeck(hole: Card[], board: Card[]): {
       }
     }
   }
-  return bestFromCombos(combos, evaluateFiveShortDeck);
+  return bestFromCombos(combos, evaluateFiveShortDeck, cmpScoreShortDeck);
 }
 
 export function bestHand(
@@ -255,6 +265,15 @@ export function cmpScore(a: HandScore, b: HandScore): number {
     if (av !== bv) return av > bv ? 1 : -1;
   }
   return 0;
+}
+
+export function cmpHands(
+  a: HandScore,
+  b: HandScore,
+  game: GameType = "NLH",
+): number {
+  if (game === "SHORT_DECK") return cmpScoreShortDeck(a, b);
+  return cmpScore(a, b);
 }
 
 /** AAAJJ+ means full house aces over jacks or better (full house A over Q/K, quads, SF). */
