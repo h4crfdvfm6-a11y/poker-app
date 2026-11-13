@@ -122,3 +122,29 @@ a {
   background: rgba(0, 0, 0, 0.25);
   font-size: 12px;
 }
+
+/* BBJP uses the same green as table felt (--felt) */
+.bbjp-panel {
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(93, 202, 134, 0.18), transparent 55%),
+    linear-gradient(180deg, #2a8556, var(--felt));
+  border: 1px solid rgba(93, 202, 134, 0.35);
+  border-radius: 18px;
+  color: #f2fff7;
+}
+
+.bbjp-panel .bbjp-label {
+  color: rgba(242, 255, 247, 0.72);
+}
+
+.bbjp-panel .bbjp-amount {
+  color: #e8ffe8;
+}
+
+.bbjp-panel .bbjp-meta {
+  color: rgba(242, 255, 247, 0.78);
+}
+
+.bbjp-text {
+  color: var(--ok);
+}
