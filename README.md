@@ -6,6 +6,7 @@ Free club poker platform for Android and iPhone (web + future store wrap).
 
 - **Player lobby** — join with invite code, see tables, tournaments, BBJP
 - **Admin panel** (PIN) — add players, send/recall chips, open tables **with rake**, create tournaments, fund/enable BBJP
+- **Live tables** — sit with buy-in, play NLH vs players/AI, automatic rake, BBJP fee + trigger payouts
 - **Club chips only** — free play, not real-money gambling
 
 ## Quick start

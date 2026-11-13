@@ -165,6 +165,12 @@ export default function LobbyPage() {
                   Rake {Number(t.rake_percent)}% / cap {Number(t.rake_cap_bb)} BB
                   {t.bbjp_enabled ? " · BBJP on" : ""}
                 </p>
+                <Link
+                  href={`/table/${t.id}`}
+                  className="btn btn-gold mt-3 !py-2 !text-sm"
+                >
+                  Join table
+                </Link>
               </article>
             ))
           )}
