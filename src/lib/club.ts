@@ -488,7 +488,9 @@ export async function closeTable(tableId: string) {
          update table_seats t
          set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
          from old
-         where t.table_id = old.table_id and t.seat_no = old.seat_no
+         where t.table_id = old.table_id
+           and t.seat_no = old.seat_no
+           and t.member_id = old.member_id
          returning old.member_id, old.stack, old.is_bot
        )
        select member_id, stack, is_bot from upd`,
@@ -510,13 +512,26 @@ export async function closeTable(tableId: string) {
     const squid = JSON.parse(runtime?.squid_json || "{}") as { pot?: number };
     const jsonPot = Math.max(0, Number(squid.pot || 0));
     const paidOut = Math.max(0, Number(state?.squidPaidOut || 0));
-    const unbanked =
-      midHand || state?.street === "showdown"
-        ? Math.max(0, Number(state?.squidCollected || 0))
-        : 0;
-    // Unbanked ante is only owed if it was never written into squid_json.
-    const anteStillLoose =
-      unbanked > 0 && jsonPot === 0 ? unbanked : 0;
+    const unbanked = Math.max(0, Number(state?.squidCollected || 0));
+    // Ante may be missing from squid_json even when a prior pot balance remains.
+    let anteStillLoose = 0;
+    if (unbanked > 0 && (midHand || state?.street === "showdown")) {
+      await sql(
+        `alter table table_runtime
+         add column if not exists squid_ante_hand_no int not null default 0`,
+      );
+      const anteRows = await sql<{
+        squid_ante_hand_no: number;
+        hand_no: number;
+      }>(
+        `select squid_ante_hand_no, hand_no from table_runtime where table_id = $1`,
+        [tableId],
+      );
+      const anteBanked =
+        Number(anteRows[0]?.squid_ante_hand_no || 0) ===
+        Number(anteRows[0]?.hand_no || 0);
+      if (!anteBanked) anteStillLoose = unbanked;
+    }
     const squidReturn = Math.max(0, jsonPot + anteStillLoose - paidOut);
     if (squidReturn > 0) {
       await creditBotFloat(squidReturn, `table_close_squid:${tableId}`);
