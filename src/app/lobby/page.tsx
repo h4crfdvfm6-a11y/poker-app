@@ -4,7 +4,7 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type LobbyData = {
-  club: { name: string; invite_code: string };
+  club: { name: string; invite_code?: string };
   tables: Array<{
     id: string;
     title: string;

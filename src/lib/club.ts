@@ -198,6 +198,16 @@ export async function listTables(clubId = DEFAULT_CLUB_ID) {
   );
 }
 
+export async function listPublicTables(clubId = DEFAULT_CLUB_ID) {
+  await ensureClubSeeded();
+  return sql<CashTable>(
+    `select * from cash_tables
+     where club_id = $1 and format = 'ring' and is_private = false
+     order by created_at desc`,
+    [clubId],
+  );
+}
+
 export async function createTable(input: {
   title: string;
   sb: number;
@@ -393,12 +403,25 @@ export async function registerForTournament(tournamentId: string, memberId: stri
 
   const total = num(tournament.buy_in) + num(tournament.fee);
   await sendChips(memberId, -total, `mtt_register:${tournamentId}`);
-  await sql(
-    `insert into tournament_entries (tournament_id, member_id) values ($1, $2)`,
+
+  // Only keep the entry if the event is still scheduled (blocks start race).
+  const inserted = await sql(
+    `insert into tournament_entries (tournament_id, member_id)
+     select $1, $2
+     where exists (
+       select 1 from tournaments where id = $1 and status = 'scheduled'
+     )
+     and not exists (
+       select 1 from tournament_entries where tournament_id = $1 and member_id = $2
+     )
+     returning tournament_id`,
     [tournamentId, memberId],
   );
+  if (!inserted.length) {
+    await sendChips(memberId, total, `mtt_register_refund:${tournamentId}`);
+    throw new Error("Tournament is not open for registration");
+  }
 
-  // Club fee stays as club rake/revenue for now
   if (num(tournament.fee) > 0) {
     await sql(
       `update club_rake set total_rake = total_rake + $1, updated_at = now() where club_id = $2`,
@@ -418,16 +441,15 @@ export async function unregisterFromTournament(
   if (tournament.status !== "scheduled") {
     throw new Error("Can only unregister before the tournament starts");
   }
-  const existing = await sql(
-    `select 1 from tournament_entries where tournament_id = $1 and member_id = $2`,
-    [tournamentId, memberId],
-  );
-  if (!existing.length) throw new Error("Not registered");
 
-  await sql(
-    `delete from tournament_entries where tournament_id = $1 and member_id = $2`,
+  const deleted = await sql(
+    `delete from tournament_entries
+     where tournament_id = $1 and member_id = $2
+     returning member_id`,
     [tournamentId, memberId],
   );
+  if (!deleted.length) throw new Error("Not registered");
+
   const refund = num(tournament.buy_in) + num(tournament.fee);
   await sendChips(memberId, refund, `mtt_unregister:${tournamentId}`);
   if (num(tournament.fee) > 0) {
