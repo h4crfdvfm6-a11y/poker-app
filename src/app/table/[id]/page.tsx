@@ -255,7 +255,9 @@ export default function TablePage() {
             </>
           ) : (
             <>
-              <div>BBJP {view.bbjp.balance.toLocaleString()}</div>
+              <div className="bbjp-text font-semibold">
+                BBJP {view.bbjp.balance.toLocaleString()}
+              </div>
               <div>{view.phase}</div>
             </>
           )}
