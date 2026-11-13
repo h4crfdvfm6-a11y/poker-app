@@ -23,6 +23,7 @@ Open [http://localhost:3000](http://localhost:3000)
 - Admin: `/admin`
 - Default invite: `FAPOKER`
 - Default admin PIN: `FAADMIN` (override with `ADMIN_PIN`)
+- Optional `SESSION_SECRET` for signed session cookies (falls back to `ADMIN_PIN`)
 
 ## Stack
 

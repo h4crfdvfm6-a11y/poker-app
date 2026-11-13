@@ -185,6 +185,15 @@ async function applyHandEconomy(tableId: string, state: EngineState) {
   await syncStacksFromState(tableId, state);
 }
 
+function maskMemberId(
+  memberId: string | null | undefined,
+  viewerMemberId: string | null,
+) {
+  if (!memberId) return null;
+  if (viewerMemberId && memberId === viewerMemberId) return memberId;
+  return null;
+}
+
 function maskState(state: EngineState | null, viewerMemberId: string | null) {
   if (!state) return null;
   return {
@@ -207,7 +216,7 @@ function maskState(state: EngineState | null, viewerMemberId: string | null) {
         (viewerMemberId && s.memberId === viewerMemberId);
       return {
         seat: s.seat,
-        memberId: s.memberId,
+        memberId: maskMemberId(s.memberId, viewerMemberId),
         name: s.name,
         stack: s.stack,
         bet: s.bet,
@@ -318,7 +327,7 @@ export async function getTableView(tableId: string, viewerMemberId: string | nul
       : null,
     seats: seats.map((s) => ({
       seat: s.seat_no,
-      memberId: s.member_id,
+      memberId: maskMemberId(s.member_id, viewerMemberId),
       name: s.display_name,
       stack: num(s.stack),
       isBot: s.is_bot,

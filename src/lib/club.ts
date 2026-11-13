@@ -165,25 +165,27 @@ export async function sendChips(
     throw new Error("Amount must be a non-zero number");
   }
   await ensureClubSeeded();
-  const [member] = await sql<Member>("select * from members where id = $1", [
-    memberId,
-  ]);
-  if (!member) throw new Error("Player not found");
-  const next = num(member.chip_balance) + amount;
-  if (next < 0) throw new Error("Insufficient chips");
-  await sql("update members set chip_balance = $1 where id = $2", [
-    next,
-    memberId,
-  ]);
+  const updated = await sql<Member>(
+    `update members
+     set chip_balance = chip_balance + $1
+     where id = $2
+       and chip_balance + $1 >= 0
+     returning *`,
+    [amount, memberId],
+  );
+  if (!updated.length) {
+    const [member] = await sql<Member>("select * from members where id = $1", [
+      memberId,
+    ]);
+    if (!member) throw new Error("Player not found");
+    throw new Error("Insufficient chips");
+  }
   await sql(
     `insert into chip_ledger (id, club_id, member_id, amount, reason, created_by)
      values ($1, $2, $3, $4, $5, 'admin')`,
     [id("led"), DEFAULT_CLUB_ID, memberId, amount, reason],
   );
-  const [updated] = await sql<Member>("select * from members where id = $1", [
-    memberId,
-  ]);
-  return updated;
+  return updated[0]!;
 }
 
 export async function listTables(clubId = DEFAULT_CLUB_ID) {

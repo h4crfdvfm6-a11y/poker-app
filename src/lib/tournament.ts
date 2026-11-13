@@ -196,25 +196,24 @@ export async function maybeFinishTournament(tableId: string) {
 
   if (alive.length > 1) return null;
 
-  let winnerId: string | null = null;
-  if (alive.length === 1) {
-    const winner = alive[0]!;
-    winnerId = winner.member_id;
-    if (!winner.is_bot && num(tournament.prize_pool) > 0) {
-      await sendChips(
-        winner.member_id,
-        num(tournament.prize_pool),
-        `mtt_win:${tournament.id}`,
-      );
-    }
-  }
+  const winner = alive[0] ?? null;
+  const winnerId = winner?.member_id ?? null;
 
-  await sql(
+  // Claim finish exactly once so concurrent pollers cannot double-pay.
+  const claimed = await sql<TournamentRuntime>(
     `update tournaments
      set status = 'finished', winner_member_id = $2
-     where id = $1`,
+     where id = $1 and status = 'running'
+     returning *`,
     [tournament.id, winnerId],
   );
+  if (!claimed.length) return null;
+
+  const prizePool = num(claimed[0]!.prize_pool ?? tournament.prize_pool ?? 0);
+  if (winner && !winner.is_bot && prizePool > 0) {
+    await sendChips(winner.member_id, prizePool, `mtt_win:${tournament.id}`);
+  }
+
   await sql(`update cash_tables set status = 'closed' where id = $1`, [tableId]);
   await sql(
     `update table_seats
@@ -232,7 +231,7 @@ export async function maybeFinishTournament(tableId: string) {
   return {
     tournamentId: tournament.id,
     winnerId,
-    prizePool: num(tournament.prize_pool),
+    prizePool,
   };
 }
 
