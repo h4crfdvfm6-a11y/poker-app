@@ -173,6 +173,7 @@ export default function TablePage() {
   >([]);
   const lastPremium = useRef<string | null>(null);
   const lastHandNo = useRef<number | null>(null);
+  const lastWinHandNo = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/table/${tableId}`, { cache: "no-store" });
@@ -227,7 +228,10 @@ export default function TablePage() {
       if (lastHandNo.current != null) playSound("deal");
       lastHandNo.current = handNo;
     }
-    if (view?.hand?.result) playSound("win");
+    if (view?.hand?.result && handNo != null && lastWinHandNo.current !== handNo) {
+      lastWinHandNo.current = handNo;
+      playSound("win");
+    }
   }, [view?.hand?.handNo, view?.hand?.result]);
 
   const seated = view?.meSeat != null;

@@ -157,7 +157,9 @@ export default function ShopPage() {
                         >
                           Buy
                         </button>
-                      ) : (
+                      ) : kind === "avatar" ||
+                        kind === "felt" ||
+                        kind === "card_back" ? (
                         <button
                           className="btn btn-ghost !py-2 !text-sm"
                           disabled={busy || equipped}
@@ -170,6 +172,8 @@ export default function ShopPage() {
                         >
                           {equipped ? "Equipped" : "Equip"}
                         </button>
+                      ) : (
+                        <span className="chip">Owned</span>
                       )}
                     </div>
                   </article>

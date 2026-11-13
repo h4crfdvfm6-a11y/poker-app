@@ -155,8 +155,27 @@ async function syncStacksFromState(tableId: string, state: EngineState) {
   }
 }
 
+async function claimHandEconomy(tableId: string, handNo: number): Promise<boolean> {
+  await sql(
+    `alter table table_runtime
+     add column if not exists economy_hand_no int not null default 0`,
+  );
+  const claimed = await sql(
+    `update table_runtime
+     set economy_hand_no = $2
+     where table_id = $1
+       and hand_no = $2
+       and economy_hand_no <> $2
+     returning table_id`,
+    [tableId, handNo],
+  );
+  return claimed.length > 0;
+}
+
 async function applyHandEconomy(tableId: string, state: EngineState) {
   if (!state.result) return;
+  // Only one poller may settle rake/BBJP for a given hand.
+  if (!(await claimHandEconomy(tableId, state.handNo))) return;
   const rake = state.result.rake || 0;
   const bbjpFee = state.result.bbjpFee || 0;
   if (rake > 0) {
@@ -452,14 +471,25 @@ async function maybeRunBots(
     const actor = state.seats.find((s) => s.seat === state.toAct);
     if (!actor?.isBot) break;
     // Natural delay so bots don't snap-act; personality drives timing.
+    const expectedVersion = current.version;
     const delay = Math.min(botThinkMs(styleForBot(actor.memberId)), 400);
     await new Promise((r) => setTimeout(r, delay));
-    const decision = decideBotAction(state, actor.seat);
-    const next = applyAction(state, actor.seat, decision.type, decision.amount ?? 0);
-    if (next.street === "showdown") {
-      await applyHandEconomy(tableId, next);
-      await markBustedPlayers(tableId);
+    // Another poller may have acted during the delay.
+    current = await readRuntime(tableId);
+    if (
+      current.version !== expectedVersion ||
+      !current.state ||
+      current.state.toAct !== actor.seat
+    ) {
+      break;
     }
+    const decision = decideBotAction(current.state, actor.seat);
+    const next = applyAction(
+      current.state,
+      actor.seat,
+      decision.type,
+      decision.amount ?? 0,
+    );
     const version = current.version + 1;
     const wrote = await writeRuntime(tableId, {
       phase: next.street === "showdown" ? "showdown" : "hand",
@@ -469,6 +499,10 @@ async function maybeRunBots(
       button: next.button,
     });
     if (!wrote) break;
+    if (next.street === "showdown") {
+      await applyHandEconomy(tableId, next);
+      await markBustedPlayers(tableId);
+    }
     await syncStacksFromState(tableId, next);
     current = await readRuntime(tableId);
   }
@@ -543,14 +577,24 @@ async function beginNextHand(tableId: string) {
     },
   );
 
+  const phase =
+    state.street === "waiting"
+      ? "waiting"
+      : state.street === "showdown"
+        ? "showdown"
+        : "hand";
   const wrote = await writeRuntime(tableId, {
     handNo,
     button,
-    phase: state.street === "waiting" ? "waiting" : "hand",
+    phase,
     state,
     version: runtime.version + 1,
   });
   if (!wrote) return;
+  if (state.street === "showdown") {
+    await applyHandEconomy(tableId, state);
+    await markBustedPlayers(tableId);
+  }
   await syncStacksFromState(tableId, state);
   await maybeRunBots(tableId, await readRuntime(tableId));
 }
@@ -751,10 +795,6 @@ export async function playerAction(
   }
 
   let next = applyAction(runtime.state, seat.seat, type, amount);
-  if (next.street === "showdown") {
-    await applyHandEconomy(tableId, next);
-    await markBustedPlayers(tableId);
-  }
   const wrote = await writeRuntime(tableId, {
     phase: next.street === "showdown" ? "showdown" : "hand",
     state: next,
@@ -763,6 +803,10 @@ export async function playerAction(
     button: next.button,
   });
   if (!wrote) throw new Error("Table updated — try again");
+  if (next.street === "showdown") {
+    await applyHandEconomy(tableId, next);
+    await markBustedPlayers(tableId);
+  }
   await syncStacksFromState(tableId, next);
   await maybeRunBots(tableId, await readRuntime(tableId));
   return getTableView(tableId, memberId);

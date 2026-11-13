@@ -191,6 +191,23 @@ function onlyOneContender(state: EngineState) {
   return contenders(state).length <= 1;
 }
 
+/** Deal remaining board streets and go to showdown (all-in runout). */
+function runOutBoardToShowdown(state: EngineState) {
+  while (state.street !== "river" && state.street !== "showdown") {
+    if (state.board.length === 0) {
+      state.street = "flop";
+      dealBoard(state, 3);
+    } else if (state.board.length === 3) {
+      state.street = "turn";
+      dealBoard(state, 1);
+    } else if (state.board.length === 4) {
+      state.street = "river";
+      dealBoard(state, 1);
+    } else break;
+  }
+  showdown(state);
+}
+
 function advanceStreet(state: EngineState) {
   collectBets(state);
   if (onlyOneContender(state)) {
@@ -213,23 +230,7 @@ function advanceStreet(state: EngineState) {
   }
   state.minRaise = state.bb;
   if (!actorsLeft.length) {
-    // run out board
-    while (state.street !== "river" && state.street !== "showdown") {
-      if (state.street === "flop") {
-        /* already on flop */
-      }
-      if (state.board.length === 0) {
-        state.street = "flop";
-        dealBoard(state, 3);
-      } else if (state.board.length === 3) {
-        state.street = "turn";
-        dealBoard(state, 1);
-      } else if (state.board.length === 4) {
-        state.street = "river";
-        dealBoard(state, 1);
-      } else break;
-    }
-    showdown(state);
+    runOutBoardToShowdown(state);
     return;
   }
   const first = nextSeat(state, state.button, canAct);
@@ -527,12 +528,17 @@ export function startHand(
     dealBoard(state, 3);
     state.currentBet = 0;
     state.minRaise = opts.bb;
-    state.toAct = nextSeat(state, state.button, canAct);
     state.acted = [];
     pushLog(
       state,
       `Hand #${opts.handNo} · BOMB — ante ${ante}, flop ${state.board.map(cardId).join(" ")}`,
     );
+    // Short stacks that shoved the ante: run out turn/river immediately.
+    if (!state.seats.some(canAct)) {
+      runOutBoardToShowdown(state);
+      return state;
+    }
+    state.toAct = nextSeat(state, state.button, canAct);
     return state;
   }
 

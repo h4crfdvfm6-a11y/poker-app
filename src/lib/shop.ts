@@ -1,5 +1,5 @@
-import { DEFAULT_CLUB_ID, ensureClubSeeded, num, sendChips } from "./club";
-import { sql } from "./db";
+import { DEFAULT_CLUB_ID, ensureClubSeeded, num } from "./club";
+import { sql, withTransaction } from "./db";
 import { id } from "./ids";
 
 export type ShopItem = {
@@ -275,58 +275,68 @@ export async function purchaseShopItem(memberId: string, itemId: string) {
   );
   if (!item) throw new Error("Item not found");
 
-  if (item.kind !== "chip_pack") {
-    const have = await sql(
-      `select 1 from member_inventory where member_id = $1 and item_id = $2`,
-      [memberId, itemId],
-    );
-    if (have.length) throw new Error("Already owned");
-  }
-
-  const spent = await sql<{ gem_balance: number }>(
-    `update members
-     set gem_balance = gem_balance - $1
-     where id = $2 and gem_balance >= $1
-     returning gem_balance`,
-    [item.gem_price, memberId],
-  );
-  if (!spent.length) throw new Error("Not enough gems");
-
   const chips = num(item.chip_amount);
-  if (item.kind === "chip_pack" && chips > 0) {
-    await sendChips(memberId, chips, `shop:${item.id}`);
-  } else {
-    await sql(
-      `insert into member_inventory (member_id, item_id) values ($1,$2)
-       on conflict do nothing`,
-      [memberId, item.id],
-    );
-    // Auto-equip cosmetics on purchase
-    if (item.kind === "avatar" && item.asset_key) {
-      await sql(`update members set equipped_avatar = $1 where id = $2`, [
-        item.asset_key,
-        memberId,
-      ]);
-    }
-    if (item.kind === "felt" && item.asset_key) {
-      await sql(`update members set equipped_felt = $1 where id = $2`, [
-        item.asset_key,
-        memberId,
-      ]);
-    }
-    if (item.kind === "card_back" && item.asset_key) {
-      await sql(`update members set equipped_card_back = $1 where id = $2`, [
-        item.asset_key,
-        memberId,
-      ]);
-    }
-  }
 
-  await sql(
-    `insert into shop_purchases (id, member_id, item_id, gems_spent, chips_granted)
-     values ($1,$2,$3,$4,$5)`,
-    [id("buy"), memberId, item.id, item.gem_price, chips],
-  );
+  await withTransaction(async (q) => {
+    if (item.kind !== "chip_pack") {
+      // Claim ownership first so concurrent buyers cannot both debit gems.
+      const claimed = await q(
+        `insert into member_inventory (member_id, item_id) values ($1,$2)
+         on conflict do nothing
+         returning member_id`,
+        [memberId, item.id],
+      );
+      if (!claimed.length) throw new Error("Already owned");
+    }
+
+    const spent = await q<{ gem_balance: number }>(
+      `update members
+       set gem_balance = gem_balance - $1
+       where id = $2 and gem_balance >= $1
+       returning gem_balance`,
+      [item.gem_price, memberId],
+    );
+    if (!spent.length) throw new Error("Not enough gems");
+
+    if (item.kind === "chip_pack" && chips > 0) {
+      const updated = await q(
+        `update members
+         set chip_balance = chip_balance + $1
+         where id = $2 and chip_balance + $1 >= 0
+         returning id`,
+        [chips, memberId],
+      );
+      if (!updated.length) throw new Error("Player not found");
+      await q(
+        `insert into chip_ledger (id, club_id, member_id, amount, reason, created_by)
+         values ($1,$2,$3,$4,$5,'admin')`,
+        [id("led"), DEFAULT_CLUB_ID, memberId, chips, `shop:${item.id}`],
+      );
+    } else if (item.asset_key) {
+      if (item.kind === "avatar") {
+        await q(`update members set equipped_avatar = $1 where id = $2`, [
+          item.asset_key,
+          memberId,
+        ]);
+      } else if (item.kind === "felt") {
+        await q(`update members set equipped_felt = $1 where id = $2`, [
+          item.asset_key,
+          memberId,
+        ]);
+      } else if (item.kind === "card_back") {
+        await q(`update members set equipped_card_back = $1 where id = $2`, [
+          item.asset_key,
+          memberId,
+        ]);
+      }
+    }
+
+    await q(
+      `insert into shop_purchases (id, member_id, item_id, gems_spent, chips_granted)
+       values ($1,$2,$3,$4,$5)`,
+      [id("buy"), memberId, item.id, item.gem_price, chips],
+    );
+  });
 
   return getMemberCosmetics(memberId);
 }

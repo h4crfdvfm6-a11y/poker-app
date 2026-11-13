@@ -378,27 +378,92 @@ export async function createTable(input: {
 }
 
 export async function closeTable(tableId: string) {
-  // Return remaining AI stacks to the club float before closing.
-  const bots = await sql<{
-    member_id: string;
-    stack: string | number;
+  await ensureClubSeeded();
+
+  // Stop the live hand first so pollers cannot keep writing stacks.
+  type RuntimeSeat = {
+    memberId?: string;
+    stack?: number;
+    bet?: number;
+    isBot?: boolean;
+  };
+  type RuntimeState = {
+    street?: string;
+    seats?: RuntimeSeat[];
+    pots?: Array<{ amount: number }>;
+  };
+  const runtimeRows = await sql<{
+    state_json: string;
+    version: number;
   }>(
-    `select member_id, stack from table_seats
-     where table_id = $1 and is_bot = true and member_id is not null`,
+    `select state_json, version from table_runtime where table_id = $1`,
     [tableId],
   );
-  for (const bot of bots) {
-    const stack = num(bot.stack);
-    if (stack > 0) {
-      await creditBotFloat(stack, `bot_table_close:${tableId}`);
+  const runtime = runtimeRows[0];
+  let state: RuntimeState | null = null;
+  if (runtime?.state_json) {
+    try {
+      state = JSON.parse(runtime.state_json) as RuntimeState;
+    } catch {
+      state = null;
     }
   }
+
+  if (state?.seats?.length && state.street && state.street !== "waiting") {
+    for (const seat of state.seats) {
+      const refund = Math.max(0, Number(seat.stack || 0) + Number(seat.bet || 0));
+      if (refund <= 0 || !seat.memberId) continue;
+      if (seat.isBot) {
+        await creditBotFloat(refund, `bot_table_close:${tableId}`);
+      } else {
+        await sendChips(seat.memberId, refund, `table_close_cashout:${tableId}`);
+      }
+    }
+    const potLeft = (state.pots || []).reduce(
+      (sum, pot) => sum + Math.max(0, Number(pot.amount || 0)),
+      0,
+    );
+    if (potLeft > 0) {
+      await creditBotFloat(potLeft, `table_close_pot:${tableId}`);
+    }
+  } else {
+    const seated = await sql<{
+      member_id: string;
+      stack: string | number;
+      is_bot: boolean;
+    }>(
+      `select member_id, stack, is_bot from table_seats
+       where table_id = $1 and member_id is not null`,
+      [tableId],
+    );
+    for (const seat of seated) {
+      const stack = num(seat.stack);
+      if (stack <= 0) continue;
+      if (seat.is_bot) {
+        await creditBotFloat(stack, `bot_table_close:${tableId}`);
+      } else {
+        await sendChips(seat.member_id, stack, `table_close_cashout:${tableId}`);
+      }
+    }
+  }
+
   await sql(
     `update table_seats
      set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
-     where table_id = $1 and is_bot = true`,
+     where table_id = $1`,
     [tableId],
   );
+  if (runtime) {
+    await sql(
+      `update table_runtime
+       set phase = 'waiting',
+           state_json = '{}',
+           version = version + 1,
+           updated_at = now()
+       where table_id = $1`,
+      [tableId],
+    );
+  }
   await sql(
     "update cash_tables set status = 'closed' where id = $1 and club_id = $2",
     [tableId, DEFAULT_CLUB_ID],
