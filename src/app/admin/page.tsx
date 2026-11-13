@@ -299,7 +299,7 @@ export default function AdminPage() {
             type="password"
             value={pin}
             onChange={(e) => setPin(e.target.value)}
-            placeholder="FAADMIN"
+            placeholder="Admin PIN"
             required
           />
           {error ? <p className="mb-3 text-sm text-[#ffb4b6]">{error}</p> : null}

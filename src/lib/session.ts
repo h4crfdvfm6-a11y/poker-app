@@ -1,23 +1,33 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
-import { DEFAULT_ADMIN_PIN } from "./club";
 
 const ADMIN_COOKIE = "fa_admin";
 const PLAYER_COOKIE = "fa_player";
-const ADMIN_TTL_SEC = 60 * 60 * 24 * 14;
+const ADMIN_TTL_SEC = 60 * 60 * 8; // 8 hours — shorter than a long-lived club session
 const PLAYER_TTL_SEC = 60 * 60 * 24 * 30;
 
+/** Process-local fallback only — never a shipped constant. */
+let ephemeralSessionSecret: string | null = null;
+
+export function adminPinConfigured(): boolean {
+  return Boolean(process.env.ADMIN_PIN?.trim());
+}
+
 export function adminPinOk(pin: string): boolean {
-  const expected = process.env.ADMIN_PIN?.trim() || DEFAULT_ADMIN_PIN;
-  return pin.trim() === expected;
+  const expected = process.env.ADMIN_PIN?.trim();
+  if (!expected) return false;
+  const a = Buffer.from(pin.trim());
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 function sessionSecret(): string {
-  return (
-    process.env.SESSION_SECRET?.trim() ||
-    process.env.ADMIN_PIN?.trim() ||
-    DEFAULT_ADMIN_PIN
-  );
+  const fromEnv = process.env.SESSION_SECRET?.trim();
+  if (fromEnv) return fromEnv;
+  // Ephemeral per process until SESSION_SECRET is bound in Cursor secrets.
+  ephemeralSessionSecret ??= randomBytes(32).toString("hex");
+  return ephemeralSessionSecret;
 }
 
 function signToken(payload: string, ttlSec: number): string {
