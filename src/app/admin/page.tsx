@@ -38,6 +38,9 @@ type Table = {
   bbjp_enabled: boolean;
   squid_enabled?: boolean;
   squid_target?: number;
+  cucurucho_enabled?: boolean;
+  cucurucho_ante_bb?: string | number;
+  cucurucho_every_hands?: number;
   status: string;
 };
 
@@ -100,6 +103,9 @@ export default function AdminPage() {
     isPrivate: false,
     squidEnabled: false,
     squidTarget: "3",
+    cucuruchoEnabled: false,
+    cucuruchoAnteBb: "5",
+    cucuruchoEveryHands: "1",
   });
 
   const [mttForm, setMttForm] = useState({
@@ -240,6 +246,9 @@ export default function AdminPage() {
         isPrivate: tableForm.isPrivate,
         squidEnabled: tableForm.squidEnabled,
         squidTarget: Number(tableForm.squidTarget),
+        cucuruchoEnabled: tableForm.cucuruchoEnabled,
+        cucuruchoAnteBb: Number(tableForm.cucuruchoAnteBb),
+        cucuruchoEveryHands: Number(tableForm.cucuruchoEveryHands),
       }),
     });
     const json = await res.json();
@@ -694,6 +703,55 @@ export default function AdminPage() {
                   />
                 </div>
               ) : null}
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={tableForm.cucuruchoEnabled}
+                  onChange={(e) =>
+                    setTableForm((s) => ({
+                      ...s,
+                      cucuruchoEnabled: e.target.checked,
+                    }))
+                  }
+                />
+                Cucurucho (ante → flop → pot or fold)
+              </label>
+              {tableForm.cucuruchoEnabled ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Ante (× BB)</label>
+                    <input
+                      className="field"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={tableForm.cucuruchoAnteBb}
+                      onChange={(e) =>
+                        setTableForm((s) => ({
+                          ...s,
+                          cucuruchoAnteBb: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Every N hands</label>
+                    <input
+                      className="field"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={tableForm.cucuruchoEveryHands}
+                      onChange={(e) =>
+                        setTableForm((s) => ({
+                          ...s,
+                          cucuruchoEveryHands: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+              ) : null}
             </div>
             <button className="btn btn-gold" type="submit">
               Create table with rake
@@ -716,6 +774,9 @@ export default function AdminPage() {
                   {t.bbjp_enabled ? " · BBJP" : ""}
                   {t.squid_enabled
                     ? ` · Squid ${t.squid_target || 3}`
+                    : ""}
+                  {t.cucurucho_enabled
+                    ? ` · Cucurucho ${t.cucurucho_ante_bb || 5}BB / ${t.cucurucho_every_hands || 1}h`
                     : ""}
                 </p>
                 {t.status === "open" ? (

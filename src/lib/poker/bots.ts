@@ -48,6 +48,20 @@ export function decideBotAction(
       : { type: "fold" };
   }
 
+  if (state.cucurucho) {
+    const potChance =
+      style === "aggressive" ? 0.55 : style === "tight" ? 0.28 : style === "beginner" ? 0.4 : 0.42;
+    if (Math.random() >= potChance) return { type: "fold" };
+    if (toCall > 0) {
+      return toCall >= seat.stack
+        ? { type: "allin", amount: stackMax }
+        : { type: "call", amount: seat.bet + toCall };
+    }
+    return seat.stack > 0
+      ? { type: "bet", amount: stackMax }
+      : { type: "fold" };
+  }
+
   if (toCall === 0) {
     if (style === "aggressive" && Math.random() < 0.35 && seat.stack > state.bb) {
       const betTo = Math.min(stackMax, seat.bet + state.bb * (style === "aggressive" ? 3 : 2));

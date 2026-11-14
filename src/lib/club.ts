@@ -51,6 +51,9 @@ export type CashTable = {
   created_at: string;
   squid_enabled?: boolean;
   squid_target?: number;
+  cucurucho_enabled?: boolean;
+  cucurucho_ante_bb?: string | number;
+  cucurucho_every_hands?: number;
 };
 
 export type Tournament = {
@@ -343,6 +346,9 @@ export async function createTable(input: {
   isPrivate: boolean;
   squidEnabled?: boolean;
   squidTarget?: number;
+  cucuruchoEnabled?: boolean;
+  cucuruchoAnteBb?: number;
+  cucuruchoEveryHands?: number;
 }) {
   await ensureClubSeeded();
   if (input.rakePercent < 0 || input.rakePercent > 20) {
@@ -357,6 +363,14 @@ export async function createTable(input: {
     gameType === "PLO6" ? 6 : gameType === "PLO5" ? 7 : gameType === "SHORT_DECK" ? 6 : 9;
   const seats = Math.max(2, Math.min(maxSeats, Math.floor(input.seats) || 6));
   const squidTarget = Math.max(1, Math.min(9, Math.floor(input.squidTarget ?? 3) || 3));
+  const cucuruchoAnteBb = Math.max(
+    1,
+    Math.min(100, Number(input.cucuruchoAnteBb ?? 5) || 5),
+  );
+  const cucuruchoEveryHands = Math.max(
+    1,
+    Math.min(100, Math.floor(input.cucuruchoEveryHands ?? 1) || 1),
+  );
   const tableId = id("tbl");
   const title =
     input.title.trim() || `${gameTypeLabel(gameType)} ${input.sb}/${input.bb}`;
@@ -364,8 +378,9 @@ export async function createTable(input: {
     `insert into cash_tables (
       id, club_id, title, game_type, format, sb, bb, seats,
       buyin_min, buyin_max, rake_percent, rake_cap_bb, bbjp_enabled, is_private,
-      squid_enabled, squid_target, status
-    ) values ($1,$2,$3,$4,'ring',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'open')`,
+      squid_enabled, squid_target,
+      cucurucho_enabled, cucurucho_ante_bb, cucurucho_every_hands, status
+    ) values ($1,$2,$3,$4,'ring',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'open')`,
     [
       tableId,
       DEFAULT_CLUB_ID,
@@ -382,6 +397,9 @@ export async function createTable(input: {
       input.isPrivate,
       Boolean(input.squidEnabled),
       squidTarget,
+      Boolean(input.cucuruchoEnabled),
+      cucuruchoAnteBb,
+      cucuruchoEveryHands,
     ],
   );
   const [table] = await sql<CashTable>("select * from cash_tables where id = $1", [

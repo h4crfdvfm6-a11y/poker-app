@@ -30,6 +30,9 @@ type TableView = {
     status?: string;
     squidEnabled?: boolean;
     squidTarget?: number;
+    cucuruchoEnabled?: boolean;
+    cucuruchoAnteBb?: number;
+    cucuruchoEveryHands?: number;
   };
   squid?: null | {
     pot: number;
@@ -69,6 +72,7 @@ type TableView = {
       bbjpFee: number;
       bbjpHit?: unknown;
     };
+    cucurucho?: boolean;
     seats: Array<{
       seat: number;
       memberId: string;
@@ -243,6 +247,11 @@ export default function TablePage() {
   }, [view?.hand?.handNo, view?.hand?.result]);
 
   const seated = view?.meSeat != null;
+  const handInProgress = Boolean(
+    view?.hand && view.hand.street !== "waiting",
+  );
+  const canLeave = seated && !handInProgress;
+  const canSit = !seated && !handInProgress;
 
   async function sit(seat: number) {
     setBusy(true);
@@ -353,7 +362,7 @@ export default function TablePage() {
             {view.table.gameType || "NLH"} · {view.table.sb}/{view.table.bb}
             {isTournament
               ? ` · Level ${view.tournament?.blindLevel ?? 1} · Prize ${view.tournament?.prizePool?.toLocaleString() ?? 0}`
-              : ` · Rake ${view.table.rakePercent}% / ${view.table.rakeCapBb}BB${view.table.bbjpEnabled ? " · BBJP" : ""}${view.table.squidEnabled ? ` · Squid ${view.table.squidTarget || 3}` : ""}`}
+              : ` · Rake ${view.table.rakePercent}% / ${view.table.rakeCapBb}BB${view.table.bbjpEnabled ? " · BBJP" : ""}${view.table.squidEnabled ? ` · Squid ${view.table.squidTarget || 3}` : ""}${view.table.cucuruchoEnabled ? ` · Cucurucho ${view.table.cucuruchoAnteBb || 5}BB` : ""}`}
           </p>
         </div>
         <div className="text-right text-xs text-[var(--muted)]">
@@ -379,7 +388,13 @@ export default function TablePage() {
                   {view.squid.target}
                 </div>
               ) : null}
-              <div>{view.phase}</div>
+              {view.table.cucuruchoEnabled ? (
+                <div className="mt-1 text-[var(--gold)]">
+                  Cucurucho every {view.table.cucuruchoEveryHands || 1} hand
+                  {(view.table.cucuruchoEveryHands || 1) === 1 ? "" : "s"}
+                </div>
+              ) : null}
+              <div>{view.hand?.cucurucho ? "cucurucho" : view.phase}</div>
             </>
           )}
         </div>
@@ -451,7 +466,7 @@ export default function TablePage() {
               className={`absolute z-20 w-28 -translate-x-1/2 ${SEAT_POS[seat.seat] || SEAT_POS[0]}`}
             >
               <button
-                disabled={busy || !seat.empty || isTournament}
+                disabled={busy || !seat.empty || isTournament || !canSit}
                 onClick={() => sit(seat.seat)}
                 className={`w-full rounded-2xl border px-2 py-2 text-left ${
                   active
@@ -547,15 +562,25 @@ export default function TablePage() {
             Add AI seat (admin)
           </button>
           {seated ? (
-            <button className="btn btn-danger !py-2 !text-sm" disabled={busy} onClick={leave}>
-              Leave table
+            <button
+              className="btn btn-danger !py-2 !text-sm"
+              disabled={busy || !canLeave}
+              title={canLeave ? "Leave table" : "Wait for the hand to finish"}
+              onClick={leave}
+            >
+              {canLeave ? "Leave table" : "Leave after hand"}
             </button>
           ) : null}
         </div>
       ) : seated && !tournamentDone ? (
         <div className="mb-3">
-          <button className="btn btn-danger !py-2 !text-sm" disabled={busy} onClick={leave}>
-            Forfeit tournament
+          <button
+            className="btn btn-danger !py-2 !text-sm"
+            disabled={busy || !canLeave}
+            title={canLeave ? "Forfeit" : "Wait for the hand to finish"}
+            onClick={leave}
+          >
+            {canLeave ? "Forfeit tournament" : "Forfeit after hand"}
           </button>
         </div>
       ) : null}

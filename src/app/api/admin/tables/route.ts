@@ -27,6 +27,9 @@ export async function POST(request: Request) {
     isPrivate?: boolean;
     squidEnabled?: boolean;
     squidTarget?: number;
+    cucuruchoEnabled?: boolean;
+    cucuruchoAnteBb?: number;
+    cucuruchoEveryHands?: number;
   };
   try {
     const table = await createTable({
@@ -43,6 +46,9 @@ export async function POST(request: Request) {
       isPrivate: Boolean(body.isPrivate),
       squidEnabled: Boolean(body.squidEnabled),
       squidTarget: Number(body.squidTarget ?? 3),
+      cucuruchoEnabled: Boolean(body.cucuruchoEnabled),
+      cucuruchoAnteBb: Number(body.cucuruchoAnteBb ?? 5),
+      cucuruchoEveryHands: Number(body.cucuruchoEveryHands ?? 1),
     });
     return Response.json({ table });
   } catch (error) {

@@ -66,6 +66,9 @@ export type TableRow = {
   game_type: string;
   squid_enabled?: boolean;
   squid_target?: number;
+  cucurucho_enabled?: boolean;
+  cucurucho_ante_bb?: string | number;
+  cucurucho_every_hands?: number;
 };
 
 export type SquidRuntime = {
@@ -478,6 +481,7 @@ function maskState(state: EngineState | null, viewerMemberId: string | null) {
     pots: state.pots,
     log: state.log.slice(-12),
     result: state.result,
+    cucurucho: Boolean(state.cucurucho),
     seats: state.seats.map((s) => {
       const isSelf = Boolean(viewerMemberId && s.memberId === viewerMemberId);
       const showdownShow =
@@ -629,6 +633,9 @@ export async function getTableView(
       status: refreshed.status,
       squidEnabled: Boolean(refreshed.squid_enabled),
       squidTarget: Number(refreshed.squid_target || 3),
+      cucuruchoEnabled: Boolean(refreshed.cucurucho_enabled),
+      cucuruchoAnteBb: num(refreshed.cucurucho_ante_bb || 5),
+      cucuruchoEveryHands: Number(refreshed.cucurucho_every_hands || 1),
     },
     squid: refreshed.squid_enabled
       ? await readSquid(tableId, Number(refreshed.squid_target || 3))
@@ -773,6 +780,19 @@ async function beginNextHand(tableId: string) {
 
   const handNo = runtime.hand_no + 1;
   const squidEnabled = !isTournament && Boolean(table.squid_enabled);
+  const cucuruchoEvery = Math.max(
+    1,
+    Math.floor(Number(table.cucurucho_every_hands || 1)) || 1,
+  );
+  const cucuruchoNow =
+    !isTournament &&
+    Boolean(table.cucurucho_enabled) &&
+    handNo % cucuruchoEvery === 0;
+  const cucuruchoAnte = cucuruchoNow
+    ? Math.max(num(table.bb), num(table.cucurucho_ante_bb || 5) * num(table.bb))
+    : 0;
+  // Squid and Cucurucho don't stack on the same hand.
+  const squidAnte = squidEnabled && !cucuruchoNow ? num(table.bb) : 0;
   const state = startHand(
     seats
       .filter((s) => s.member_id)
@@ -794,7 +814,8 @@ async function beginNextHand(tableId: string) {
       bbjpEnabled: !isTournament && Boolean(table.bbjp_enabled) && bbjp.enabled,
       bbjpTrigger: bbjp.trigger_hand,
       gameType: (isGameType(table.game_type) ? table.game_type : "NLH") as GameType,
-      squidAnte: squidEnabled ? num(table.bb) : 0,
+      squidAnte,
+      cucuruchoAnte,
     },
   );
 
@@ -1075,6 +1096,37 @@ export function legalActions(state: EngineState, seatNo: number): {
       actions: [
         { type: "fold", label: "Fold" },
         { type: "allin", label: `All-in ${stackMax}`, amount: stackMax },
+      ],
+      sizing: null,
+    };
+  }
+
+  if (state.cucurucho) {
+    const stackMax = seat.bet + seat.stack;
+    if (toCall > 0) {
+      const pay = Math.min(toCall, seat.stack);
+      return {
+        actions: [
+          { type: "fold", label: "Fold" },
+          {
+            type: pay >= toCall ? "call" : "allin",
+            label: pay >= toCall ? `Call pot ${pay}` : `All-in ${pay}`,
+            amount: pay >= toCall ? seat.bet + pay : stackMax,
+          },
+        ],
+        sizing: null,
+      };
+    }
+    const potBet = Math.max(state.bb, publicPot(state));
+    const need = Math.min(seat.stack, potBet);
+    return {
+      actions: [
+        { type: "fold", label: "Fold" },
+        {
+          type: need < potBet ? "allin" : "bet",
+          label: need < potBet ? `All-in ${need}` : `Pot ${need}`,
+          amount: need < potBet ? stackMax : seat.bet + need,
+        },
       ],
       sizing: null,
     };

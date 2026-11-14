@@ -75,6 +75,8 @@ export type EngineState = {
   dealtIn: number[];
   endedAt: number | null;
   gameType: GameType;
+  /** ClubGG Cucurucho: ante → flop → pot-or-fold → runout. */
+  cucurucho: boolean;
   /** Chips taken for Squid ante this hand (not in the main pot). */
   squidCollected: number;
   /** Squid pot paid into a winner's stack this hand (avoid closeTable double-pay). */
@@ -223,6 +225,19 @@ function advanceStreet(state: EngineState) {
     state.street = "flop";
     dealBoard(state, 3);
   } else if (state.street === "flop") {
+    if (state.cucurucho) {
+      // Pot-or-fold flop only — turn and river run out with no more betting.
+      state.street = "turn";
+      dealBoard(state, 1);
+      state.street = "river";
+      dealBoard(state, 1);
+      pushLog(
+        state,
+        `CUCURUCHO runout ${state.board.map(cardId).join(" ")}`,
+      );
+      showdown(state);
+      return;
+    }
     state.street = "turn";
     dealBoard(state, 1);
   } else if (state.street === "turn") {
@@ -462,8 +477,10 @@ export function startHand(
     bbjpEnabled: boolean;
     bbjpTrigger: string;
     gameType?: GameType;
-    /** Optional Squid ante taken before blinds / bomb ante. */
+    /** Optional Squid ante taken after blinds / bomb ante. */
     squidAnte?: number;
+    /** Cucurucho ante (>0 triggers ante → flop → pot-or-fold). */
+    cucuruchoAnte?: number;
   },
 ): EngineState {
   const gameType: GameType = opts.gameType ?? "NLH";
@@ -481,6 +498,7 @@ export function startHand(
     contributed: 0,
   }));
 
+  const cucuruchoAnte = Math.max(0, opts.cucuruchoAnte || 0);
   const state: EngineState = {
     handNo: opts.handNo,
     street: "preflop",
@@ -506,6 +524,7 @@ export function startHand(
     dealtIn: [],
     endedAt: null,
     gameType,
+    cucurucho: cucuruchoAnte > 0,
     squidCollected: 0,
     squidPaidOut: 0,
   };
@@ -516,7 +535,7 @@ export function startHand(
     return state;
   }
 
-  // deal first so bomb antes still see hole cards
+  // deal first so bomb/cucurucho antes still see hole cards
   const holes = holeCardCount(gameType);
   for (let i = 0; i < holes; i++) {
     for (const s of active) {
@@ -526,6 +545,28 @@ export function startHand(
   state.dealtIn = active.map((s) => s.seat);
 
   const squidAnte = Math.max(0, opts.squidAnte || 0);
+
+  if (state.cucurucho) {
+    for (const s of active) {
+      takeFromStack(s, cucuruchoAnte);
+    }
+    collectBets(state);
+    state.street = "flop";
+    dealBoard(state, 3);
+    state.currentBet = 0;
+    state.minRaise = opts.bb;
+    state.acted = [];
+    pushLog(
+      state,
+      `Hand #${opts.handNo} · CUCURUCHO ante ${cucuruchoAnte} · flop ${state.board.map(cardId).join(" ")}`,
+    );
+    if (!state.seats.some(canAct)) {
+      runOutBoardToShowdown(state);
+      return state;
+    }
+    state.toAct = nextSeat(state, state.button, canAct);
+    return state;
+  }
 
   if (isBombPot(gameType)) {
     // Everyone antes 1 BB; no preflop betting — start on the flop.
@@ -642,7 +683,50 @@ export function applyAction(
 
   let reopened = false;
 
-  if (type === "fold") {
+  if (state.cucurucho) {
+    // Pot or fold only — no checks, limps, or raises.
+    if (type === "fold") {
+      seat.folded = true;
+      pushLog(state, `${seat.name} folds`);
+    } else if (type === "bet" && state.currentBet === 0) {
+      const potBet = Math.max(state.bb, publicPot(state));
+      const target = Math.min(seat.bet + seat.stack, seat.bet + potBet);
+      const need = target - seat.bet;
+      if (need <= 0) throw new Error("Bad pot bet");
+      takeFromStack(seat, need);
+      state.currentBet = seat.bet;
+      state.lastAggressor = seatNo;
+      reopened = true;
+      pushLog(state, `${seat.name} pots ${seat.bet}`);
+    } else if (
+      (type === "call" || type === "allin") &&
+      state.currentBet > 0
+    ) {
+      const need = Math.min(seat.stack, toCall);
+      if (need <= 0) throw new Error("Nothing to call");
+      takeFromStack(seat, need);
+      if (seat.bet > state.currentBet) {
+        state.currentBet = seat.bet;
+        state.lastAggressor = seatNo;
+        reopened = true;
+      }
+      pushLog(
+        state,
+        need >= toCall
+          ? `${seat.name} calls ${need}`
+          : `${seat.name} all-in ${seat.bet}`,
+      );
+    } else if (type === "allin" && state.currentBet === 0) {
+      // Short of a full pot — shove remaining.
+      takeFromStack(seat, seat.stack);
+      state.currentBet = Math.max(state.currentBet, seat.bet);
+      state.lastAggressor = seatNo;
+      reopened = true;
+      pushLog(state, `${seat.name} all-in ${seat.bet}`);
+    } else {
+      throw new Error("Cucurucho: pot or fold only");
+    }
+  } else if (type === "fold") {
     seat.folded = true;
     pushLog(state, `${seat.name} folds`);
   } else if (type === "check") {

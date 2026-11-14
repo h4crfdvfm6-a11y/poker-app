@@ -17,6 +17,8 @@ type LobbyData = {
     bbjp_enabled: boolean;
     squid_enabled?: boolean;
     squid_target?: number;
+    cucurucho_enabled?: boolean;
+    cucurucho_ante_bb?: string | number;
     buyin_min: string | number;
     buyin_max: string | number;
   }>;
@@ -216,6 +218,9 @@ export default function LobbyPage() {
                   {t.bbjp_enabled ? " · BBJP on" : ""}
                   {t.squid_enabled
                     ? ` · Squid to ${t.squid_target || 3}`
+                    : ""}
+                  {t.cucurucho_enabled
+                    ? ` · Cucurucho ${t.cucurucho_ante_bb || 5}BB`
                     : ""}
                 </p>
                 <Link
