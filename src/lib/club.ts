@@ -454,16 +454,22 @@ export async function closeTable(tableId: string) {
     }
   }
 
+  const street = state?.street;
   const midHand =
     Boolean(state?.seats?.length) &&
-    Boolean(state?.street) &&
-    state!.street !== "waiting" &&
-    state!.street !== "showdown";
+    Boolean(street) &&
+    street !== "waiting" &&
+    street !== "showdown";
+  const atShowdown =
+    Boolean(state?.seats?.length) && street === "showdown";
 
-  if (midHand && state?.seats) {
-    // Live pot chips live in runtime — refund stack+bet and return side pots.
+  if ((midHand || atShowdown) && state?.seats) {
+    // Prefer runtime stacks (include post-settle squid/BBJP awards on showdown).
+    // Mid-hand also refunds street bets; showdown bets are already in pots/result.
     for (const seat of state.seats) {
-      const refund = Math.max(0, Number(seat.stack || 0) + Number(seat.bet || 0));
+      const refund = midHand
+        ? Math.max(0, Number(seat.stack || 0) + Number(seat.bet || 0))
+        : Math.max(0, Number(seat.stack || 0));
       if (refund <= 0 || !seat.memberId) continue;
       if (seat.isBot) {
         await creditBotFloat(refund, `bot_table_close:${tableId}`);
@@ -471,21 +477,32 @@ export async function closeTable(tableId: string) {
         await sendChips(seat.memberId, refund, `table_close_cashout:${tableId}`);
       }
     }
-    const potLeft = (state.pots || []).reduce(
-      (sum, pot) => sum + Math.max(0, Number(pot.amount || 0)),
-      0,
-    );
-    if (potLeft > 0) {
-      await creditBotFloat(potLeft, `table_close_pot:${tableId}`);
+    if (midHand) {
+      const potLeft = (state.pots || []).reduce(
+        (sum, pot) => sum + Math.max(0, Number(pot.amount || 0)),
+        0,
+      );
+      if (potLeft > 0) {
+        await creditBotFloat(potLeft, `table_close_pot:${tableId}`);
+      }
     }
+    // Clear seats with member_id CAS so a concurrent leave cannot double-cash.
     await sql(
-      `update table_seats
+      `with old as (
+         select table_id, seat_no, member_id
+         from table_seats
+         where table_id = $1 and member_id is not null
+       )
+       update table_seats t
        set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
-       where table_id = $1`,
+       from old
+       where t.table_id = old.table_id
+         and t.seat_no = old.seat_no
+         and t.member_id = old.member_id`,
       [tableId],
     );
   } else {
-    // Waiting / showdown: atomically clear seats so leaveTable cannot double-cash.
+    // Waiting: atomically clear seats so leaveTable cannot double-cash.
     const seated = await sql<{
       member_id: string;
       stack: string | number;

@@ -348,10 +348,20 @@ async function writeRuntime(
 }
 
 async function syncStacksFromState(tableId: string, state: EngineState) {
+  // Only stamp stacks onto the same open-table occupant — never an emptied
+  // or reseated row (leave/sit/close race during showdown settlement).
   for (const s of state.seats) {
+    if (!s.memberId) continue;
     await sql(
-      `update table_seats set stack = $1 where table_id = $2 and seat_no = $3`,
-      [s.stack, tableId, s.seat],
+      `update table_seats ts
+       set stack = $1
+       from cash_tables t
+       where ts.table_id = $2
+         and ts.seat_no = $3
+         and ts.member_id = $4
+         and t.id = ts.table_id
+         and t.status = 'open'`,
+      [s.stack, tableId, s.seat, s.memberId],
     );
   }
 }
@@ -359,12 +369,15 @@ async function syncStacksFromState(tableId: string, state: EngineState) {
 async function claimHandEconomy(tableId: string, handNo: number): Promise<boolean> {
   await ensureRuntime(tableId);
   const claimed = await sql(
-    `update table_runtime
+    `update table_runtime r
      set economy_hand_no = $2
-     where table_id = $1
-       and hand_no = $2
-       and economy_hand_no <> $2
-     returning table_id`,
+     from cash_tables t
+     where r.table_id = $1
+       and t.id = r.table_id
+       and t.status = 'open'
+       and r.hand_no = $2
+       and r.economy_hand_no <> $2
+     returning r.table_id`,
     [tableId, handNo],
   );
   return claimed.length > 0;
@@ -829,8 +842,10 @@ export async function sitAtTable(
     );
   }
   const runtime = await readRuntime(tableId);
-  if (runtime.state && runtime.state.street !== "waiting" && runtime.state.street !== "showdown") {
-    // allow sit between hands only for simplicity when waiting/showdown; during hand ok if empty seat
+  // Block sit during showdown/settlement so a new occupant cannot inherit
+  // post-award stacks stamped by seat_no before member_id is checked.
+  if (runtime.state && runtime.state.street !== "waiting") {
+    throw new Error("Wait for the hand to finish");
   }
   const seats = await getSeats(tableId);
   if (!seats.length) {
@@ -890,7 +905,9 @@ export async function sitAtTable(
 
 export async function leaveTable(tableId: string, memberId: string) {
   const runtime = await readRuntime(tableId);
-  if (runtime.state && !["waiting", "showdown"].includes(runtime.state.street)) {
+  // Waiting only — showdown settlement may still be banking squid / BBJP onto
+  // stacks; leaving mid-window can cash pre-award seats while pot is cleared.
+  if (runtime.state && runtime.state.street !== "waiting") {
     throw new Error("Wait for the hand to finish");
   }
   const table = await getTable(tableId);
@@ -944,6 +961,10 @@ export async function addBot(tableId: string, seatNo?: number) {
     throw new Error("Cannot add bots to a running tournament");
   }
   await ensureRuntime(tableId);
+  const runtime = await readRuntime(tableId);
+  if (runtime.state && runtime.state.street !== "waiting") {
+    throw new Error("Wait for the hand to finish");
+  }
   const seats = await getSeats(tableId);
   if (!seats.length) {
     for (let i = 0; i < table.seats; i++) {
