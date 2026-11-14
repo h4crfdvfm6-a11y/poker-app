@@ -424,15 +424,37 @@ export async function closeTable(tableId: string) {
     `alter table table_runtime
      add column if not exists squid_json text not null default '{}'`,
   );
+  await sql(
+    `alter table table_runtime
+     add column if not exists squid_ante_hand_no int not null default 0`,
+  );
 
-  const runtimeRows = await sql<{
+  // Freeze runtime in one shot: capture state/squid, clear squid so late banks
+  // cannot write after this (banks require status=open, already claimed closed).
+  const frozen = await sql<{
     state_json: string;
     squid_json: string;
+    squid_ante_hand_no: number;
+    hand_no: number;
   }>(
-    `select state_json, squid_json from table_runtime where table_id = $1`,
+    `with old as (
+       select table_id, state_json, squid_json, squid_ante_hand_no, hand_no
+       from table_runtime
+       where table_id = $1
+     ),
+     upd as (
+       update table_runtime t
+       set squid_json = '{}',
+           version = t.version + 1,
+           updated_at = now()
+       from old
+       where t.table_id = old.table_id
+       returning old.state_json, old.squid_json, old.squid_ante_hand_no, old.hand_no
+     )
+     select state_json, squid_json, squid_ante_hand_no, hand_no from upd`,
     [tableId],
   );
-  const runtime = runtimeRows[0];
+  const runtime = frozen[0];
   let state: RuntimeState | null = null;
   if (runtime?.state_json) {
     try {
@@ -507,31 +529,20 @@ export async function closeTable(tableId: string) {
     }
   }
 
-  // Return unfinished squid pot, minus any amount already paid into stacks.
+  // Return unfinished squid pot from the frozen snapshot (consistent ante flag).
   try {
     const squid = JSON.parse(runtime?.squid_json || "{}") as { pot?: number };
     const jsonPot = Math.max(0, Number(squid.pot || 0));
     const paidOut = Math.max(0, Number(state?.squidPaidOut || 0));
     const unbanked = Math.max(0, Number(state?.squidCollected || 0));
-    // Ante may be missing from squid_json even when a prior pot balance remains.
-    let anteStillLoose = 0;
-    if (unbanked > 0 && (midHand || state?.street === "showdown")) {
-      await sql(
-        `alter table table_runtime
-         add column if not exists squid_ante_hand_no int not null default 0`,
-      );
-      const anteRows = await sql<{
-        squid_ante_hand_no: number;
-        hand_no: number;
-      }>(
-        `select squid_ante_hand_no, hand_no from table_runtime where table_id = $1`,
-        [tableId],
-      );
-      const anteBanked =
-        Number(anteRows[0]?.squid_ante_hand_no || 0) ===
-        Number(anteRows[0]?.hand_no || 0);
-      if (!anteBanked) anteStillLoose = unbanked;
-    }
+    const anteBanked =
+      Number(runtime?.squid_ante_hand_no || 0) === Number(runtime?.hand_no || 0);
+    const anteStillLoose =
+      unbanked > 0 &&
+      !anteBanked &&
+      (midHand || state?.street === "showdown")
+        ? unbanked
+        : 0;
     const squidReturn = Math.max(0, jsonPot + anteStillLoose - paidOut);
     if (squidReturn > 0) {
       await creditBotFloat(squidReturn, `table_close_squid:${tableId}`);
@@ -546,7 +557,6 @@ export async function closeTable(tableId: string) {
        set phase = 'waiting',
            state_json = '{}',
            squid_json = '{}',
-           version = version + 1,
            updated_at = now()
        where table_id = $1`,
       [tableId],

@@ -1,4 +1,4 @@
-import { sql } from "./db";
+import { sql, withTransaction } from "./db";
 import { id } from "./ids";
 import {
   DEFAULT_CLUB_ID,
@@ -136,7 +136,12 @@ async function readSquid(tableId: string, target = 3): Promise<SquidRuntime> {
 
 async function writeSquid(tableId: string, squid: SquidRuntime) {
   await sql(
-    `update table_runtime set squid_json = $2, updated_at = now() where table_id = $1`,
+    `update table_runtime r
+     set squid_json = $2, updated_at = now()
+     from cash_tables t
+     where r.table_id = $1
+       and t.id = r.table_id
+       and t.status = 'open'`,
     [tableId, JSON.stringify(squid)],
   );
 }
@@ -154,13 +159,17 @@ async function claimSquidColumn(
     `alter table table_runtime
      add column if not exists squid_ante_hand_no int not null default 0`,
   );
+  // Only while the table is still open — closeTable claims closed first.
   const claimed = await sql(
-    `update table_runtime
+    `update table_runtime r
      set ${column} = $2
-     where table_id = $1
-       and hand_no = $2
-       and ${column} <> $2
-     returning table_id`,
+     from cash_tables t
+     where r.table_id = $1
+       and t.id = r.table_id
+       and t.status = 'open'
+       and r.hand_no = $2
+       and r.${column} <> $2
+     returning r.table_id`,
     [tableId, handNo],
   );
   return claimed.length > 0;
@@ -206,7 +215,7 @@ function awardSquid(
   };
 }
 
-/** Bank this hand's squid ante into the pot (once per hand). */
+/** Bank this hand's squid ante into the pot (once per hand, atomic). */
 async function bankSquidAnte(
   tableId: string,
   state: EngineState,
@@ -215,14 +224,53 @@ async function bankSquidAnte(
   if (!table.squid_enabled || table.format === "tournament") return;
   const collected = state.squidCollected || 0;
   if (collected <= 0) return;
-  if (!(await claimSquidColumn(tableId, state.handNo, "squid_ante_hand_no"))) {
-    return;
-  }
-  const squid = await readSquid(tableId, Number(table.squid_target || 3));
-  await writeSquid(tableId, {
-    ...squid,
-    pot: squid.pot + collected,
-    lastEvent: `Squid ante +${collected}`,
+  await sql(
+    `alter table table_runtime
+     add column if not exists squid_ante_hand_no int not null default 0`,
+  );
+  await withTransaction(async (q) => {
+    const open = await q(
+      `select 1 from cash_tables where id = $1 and status = 'open' for update`,
+      [tableId],
+    );
+    if (!open.length) return;
+    const claimed = await q<{ squid_json: string }>(
+      `update table_runtime
+       set squid_ante_hand_no = $2
+       where table_id = $1
+         and hand_no = $2
+         and squid_ante_hand_no <> $2
+       returning squid_json`,
+      [tableId, state.handNo],
+    );
+    if (!claimed.length) return;
+    let squid: SquidRuntime;
+    try {
+      const parsed = JSON.parse(claimed[0]!.squid_json || "{}") as Partial<SquidRuntime>;
+      squid = {
+        pot: Number(parsed.pot || 0),
+        scores:
+          parsed.scores && typeof parsed.scores === "object" ? parsed.scores : {},
+        target: Number(parsed.target || table.squid_target || 3) || 3,
+        lastEvent: parsed.lastEvent ?? null,
+      };
+    } catch {
+      squid = {
+        pot: 0,
+        scores: {},
+        target: Number(table.squid_target || 3) || 3,
+        lastEvent: null,
+      };
+    }
+    squid = {
+      ...squid,
+      pot: squid.pot + collected,
+      lastEvent: `Squid ante +${collected}`,
+    };
+    await q(
+      `update table_runtime set squid_json = $2, updated_at = now() where table_id = $1`,
+      [tableId, JSON.stringify(squid)],
+    );
   });
 }
 
@@ -251,9 +299,14 @@ async function settleSquidShowdown(
   }
   squid = awardSquid(state, squid, true);
   await writeSquid(tableId, squid);
-  // Keep showdown state_json stacks in sync with the paid pot.
+  // Keep showdown state_json stacks in sync with the paid pot (open tables only).
   await sql(
-    `update table_runtime set state_json = $2, updated_at = now() where table_id = $1`,
+    `update table_runtime r
+     set state_json = $2, updated_at = now()
+     from cash_tables t
+     where r.table_id = $1
+       and t.id = r.table_id
+       and t.status = 'open'`,
     [tableId, JSON.stringify(state)],
   );
 }
@@ -288,15 +341,19 @@ async function writeRuntime(
 ): Promise<boolean> {
   const expected = patch.version - 1;
   const rows = await sql(
-    `update table_runtime
+    `update table_runtime r
      set hand_no = coalesce($2, hand_no),
          button_seat = coalesce($3, button_seat),
          phase = $4,
          state_json = $5,
          version = $6,
          updated_at = now()
-     where table_id = $1 and version = $7
-     returning version`,
+     from cash_tables t
+     where r.table_id = $1
+       and t.id = r.table_id
+       and t.status = 'open'
+       and r.version = $7
+     returning r.version`,
     [
       tableId,
       patch.handNo ?? null,
