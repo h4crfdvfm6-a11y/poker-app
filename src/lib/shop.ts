@@ -1,6 +1,7 @@
 import { DEFAULT_CLUB_ID, ensureClubSeeded, num } from "./club";
 import { sql, withTransaction } from "./db";
 import { id } from "./ids";
+import { ensureOnce } from "./schema-once";
 
 export type ShopItem = {
   id: string;
@@ -147,67 +148,69 @@ const DEFAULTS: Array<{
 ];
 
 async function ensureShopSchema() {
-  await sql(
-    `alter table members add column if not exists gem_balance integer not null default 0`,
-  );
-  await sql(
-    `alter table members add column if not exists equipped_avatar text not null default 'avatar_default'`,
-  );
-  await sql(
-    `alter table members add column if not exists equipped_felt text not null default 'felt_classic'`,
-  );
-  await sql(
-    `alter table members add column if not exists equipped_card_back text not null default 'back_navy'`,
-  );
-  await sql(
-    `create table if not exists shop_catalog (
-       id text primary key,
-       kind text not null,
-       title text not null,
-       description text not null default '',
-       gem_price integer not null default 0,
-       chip_amount numeric(14, 2) not null default 0,
-       asset_key text not null default '',
-       sort_order integer not null default 0,
-       active boolean not null default true
-     )`,
-  );
-  await sql(
-    `create table if not exists member_inventory (
-       member_id text not null references members(id),
-       item_id text not null references shop_catalog(id),
-       acquired_at timestamptz not null default now(),
-       primary key (member_id, item_id)
-     )`,
-  );
-  await sql(
-    `create table if not exists shop_purchases (
-       id text primary key,
-       member_id text not null references members(id),
-       item_id text not null,
-       gems_spent integer not null default 0,
-       chips_granted numeric(14, 2) not null default 0,
-       created_at timestamptz not null default now()
-     )`,
-  );
-  for (const item of DEFAULTS) {
+  await ensureOnce("shop-schema", async () => {
     await sql(
-      `insert into shop_catalog (
-         id, kind, title, description, gem_price, chip_amount, asset_key, sort_order, active
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,true)
-       on conflict (id) do nothing`,
-      [
-        item.id,
-        item.kind,
-        item.title,
-        item.description,
-        item.gem_price,
-        item.chip_amount,
-        item.asset_key,
-        item.sort_order,
-      ],
+      `alter table members add column if not exists gem_balance integer not null default 0`,
     );
-  }
+    await sql(
+      `alter table members add column if not exists equipped_avatar text not null default 'avatar_default'`,
+    );
+    await sql(
+      `alter table members add column if not exists equipped_felt text not null default 'felt_classic'`,
+    );
+    await sql(
+      `alter table members add column if not exists equipped_card_back text not null default 'back_navy'`,
+    );
+    await sql(
+      `create table if not exists shop_catalog (
+         id text primary key,
+         kind text not null,
+         title text not null,
+         description text not null default '',
+         gem_price integer not null default 0,
+         chip_amount numeric(14, 2) not null default 0,
+         asset_key text not null default '',
+         sort_order integer not null default 0,
+         active boolean not null default true
+       )`,
+    );
+    await sql(
+      `create table if not exists member_inventory (
+         member_id text not null references members(id),
+         item_id text not null references shop_catalog(id),
+         acquired_at timestamptz not null default now(),
+         primary key (member_id, item_id)
+       )`,
+    );
+    await sql(
+      `create table if not exists shop_purchases (
+         id text primary key,
+         member_id text not null references members(id),
+         item_id text not null,
+         gems_spent integer not null default 0,
+         chips_granted numeric(14, 2) not null default 0,
+         created_at timestamptz not null default now()
+       )`,
+    );
+    for (const item of DEFAULTS) {
+      await sql(
+        `insert into shop_catalog (
+           id, kind, title, description, gem_price, chip_amount, asset_key, sort_order, active
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,true)
+         on conflict (id) do nothing`,
+        [
+          item.id,
+          item.kind,
+          item.title,
+          item.description,
+          item.gem_price,
+          item.chip_amount,
+          item.asset_key,
+          item.sort_order,
+        ],
+      );
+    }
+  });
 }
 
 export async function listShopCatalog() {

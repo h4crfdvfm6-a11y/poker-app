@@ -7,6 +7,7 @@ import {
   isGameType,
   type GameType,
 } from "./poker/variants";
+import { ensureOnce } from "./schema-once";
 
 export const DEFAULT_CLUB_ID = "club_fa_poker";
 const MAX_CLUB_MEMBERS = 48;
@@ -205,9 +206,11 @@ async function ensureHouseMember() {
 }
 
 async function ensureBotFloatColumn() {
-  await sql(
-    `alter table club_rake add column if not exists bot_float numeric(14, 2) not null default 0`,
-  );
+  await ensureOnce("bot-float-column", async () => {
+    await sql(
+      `alter table club_rake add column if not exists bot_float numeric(14, 2) not null default 0`,
+    );
+  });
 }
 
 /** Debit club AI bankroll when seating a bot (prevents unbacked chip minting). */
@@ -344,14 +347,16 @@ export async function createTable(input: {
   if (input.rakePercent < 0 || input.rakePercent > 20) {
     throw new Error("Rake percent must be between 0 and 20");
   }
-  await sql(
-    `alter table cash_tables
-     add column if not exists squid_enabled boolean not null default false`,
-  );
-  await sql(
-    `alter table cash_tables
-     add column if not exists squid_target int not null default 3`,
-  );
+  await ensureOnce("table-runtime-squid-cols", async () => {
+    await sql(
+      `alter table cash_tables
+       add column if not exists squid_enabled boolean not null default false`,
+    );
+    await sql(
+      `alter table cash_tables
+       add column if not exists squid_target int not null default 3`,
+    );
+  });
   const gameType: GameType = isGameType(input.gameType ?? "NLH")
     ? (input.gameType as GameType)
     : "NLH";
@@ -420,14 +425,16 @@ export async function closeTable(tableId: string) {
     squidPaidOut?: number;
   };
 
-  await sql(
-    `alter table table_runtime
-     add column if not exists squid_json text not null default '{}'`,
-  );
-  await sql(
-    `alter table table_runtime
-     add column if not exists squid_ante_hand_no int not null default 0`,
-  );
+  await ensureOnce("table-runtime-squid-cols", async () => {
+    await sql(
+      `alter table table_runtime
+       add column if not exists squid_json text not null default '{}'`,
+    );
+    await sql(
+      `alter table table_runtime
+       add column if not exists squid_ante_hand_no int not null default 0`,
+    );
+  });
 
   // Freeze runtime in one shot: capture state/squid, clear squid so late banks
   // cannot write after this (banks require status=open, already claimed closed).

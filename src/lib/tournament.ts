@@ -2,6 +2,8 @@ import { sql } from "./db";
 import { id } from "./ids";
 import {
   DEFAULT_CLUB_ID,
+  creditBotFloat,
+  debitBotFloat,
   ensureClubSeeded,
   getTournament,
   listTournaments,
@@ -145,13 +147,26 @@ export async function startTournament(tournamentId: string) {
 
     const seats = entries.length;
     const kind = (tournament as { kind?: string }).kind || "mtt";
-    let prizePool = num(tournament.buy_in) * entries.length;
+    const collected = num(tournament.buy_in) * entries.length;
+    let prizePool = collected;
     let spinMult: number | null = null;
     if (kind === "spin") {
       spinMult = rollSpinMultiplier();
-      // Winner-take-all prize = buy-in × seats × multiplier / seats * seats = buy-in * mult * seats / something
-      // Standard: prize pool = buy_in * multiplier (for 3-max, displayed as ×N of buy-in to winner).
+      // Winner-take-all prize = buy_in × multiplier. Overlay above collected
+      // buy-ins is funded from the club AI float (never mint unbacked chips).
       prizePool = num(tournament.buy_in) * spinMult;
+      const overlay = prizePool - collected;
+      if (overlay > 0) {
+        try {
+          await debitBotFloat(overlay, `spin_overlay:${tournamentId}`);
+        } catch {
+          // Float too low for this multiplier — fall back to breakeven (×seats).
+          spinMult = entries.length;
+          prizePool = collected;
+        }
+      } else if (overlay < 0) {
+        await creditBotFloat(-overlay, `spin_surplus:${tournamentId}`);
+      }
       await sql(
         `update tournaments set spin_multiplier = $2 where id = $1`,
         [tournamentId, spinMult],

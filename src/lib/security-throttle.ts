@@ -1,17 +1,20 @@
 import { sql, withTransaction } from "./db";
+import { ensureOnce } from "./schema-once";
 
 const WINDOW_MS = 15 * 60 * 1000;
 const LOCKOUT_MS = 15 * 60 * 1000;
 
 async function ensureTable() {
-  await sql(
-    `create table if not exists security_throttle (
-       key text primary key,
-       failures integer not null default 0,
-       window_started timestamptz not null default now(),
-       locked_until timestamptz
-     )`,
-  );
+  await ensureOnce("security-throttle", async () => {
+    await sql(
+      `create table if not exists security_throttle (
+         key text primary key,
+         failures integer not null default 0,
+         window_started timestamptz not null default now(),
+         locked_until timestamptz
+       )`,
+    );
+  });
 }
 
 export async function throttleBlocked(

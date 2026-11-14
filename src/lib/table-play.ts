@@ -1,5 +1,6 @@
 import { sql, withTransaction } from "./db";
 import { id } from "./ids";
+import { ensureOnce } from "./schema-once";
 import {
   DEFAULT_CLUB_ID,
   bumpBbjpCollections,
@@ -75,18 +76,32 @@ export type SquidRuntime = {
 };
 
 async function ensureRuntime(tableId: string) {
-  await sql(
-    `alter table table_runtime
-     add column if not exists squid_json text not null default '{}'`,
-  );
-  await sql(
-    `alter table cash_tables
-     add column if not exists squid_enabled boolean not null default false`,
-  );
-  await sql(
-    `alter table cash_tables
-     add column if not exists squid_target int not null default 3`,
-  );
+  await ensureOnce("table-runtime-squid-cols", async () => {
+    await sql(
+      `alter table table_runtime
+       add column if not exists squid_json text not null default '{}'`,
+    );
+    await sql(
+      `alter table table_runtime
+       add column if not exists squid_hand_no int not null default 0`,
+    );
+    await sql(
+      `alter table table_runtime
+       add column if not exists squid_ante_hand_no int not null default 0`,
+    );
+    await sql(
+      `alter table table_runtime
+       add column if not exists economy_hand_no int not null default 0`,
+    );
+    await sql(
+      `alter table cash_tables
+       add column if not exists squid_enabled boolean not null default false`,
+    );
+    await sql(
+      `alter table cash_tables
+       add column if not exists squid_target int not null default 3`,
+    );
+  });
   const rows = await sql("select table_id from table_runtime where table_id = $1", [
     tableId,
   ]);
@@ -151,14 +166,7 @@ async function claimSquidColumn(
   handNo: number,
   column: "squid_hand_no" | "squid_ante_hand_no",
 ): Promise<boolean> {
-  await sql(
-    `alter table table_runtime
-     add column if not exists squid_hand_no int not null default 0`,
-  );
-  await sql(
-    `alter table table_runtime
-     add column if not exists squid_ante_hand_no int not null default 0`,
-  );
+  await ensureRuntime(tableId);
   // Only while the table is still open — closeTable claims closed first.
   const claimed = await sql(
     `update table_runtime r
@@ -224,10 +232,7 @@ async function bankSquidAnte(
   if (!table.squid_enabled || table.format === "tournament") return;
   const collected = state.squidCollected || 0;
   if (collected <= 0) return;
-  await sql(
-    `alter table table_runtime
-     add column if not exists squid_ante_hand_no int not null default 0`,
-  );
+  await ensureRuntime(tableId);
   await withTransaction(async (q) => {
     const open = await q(
       `select 1 from cash_tables where id = $1 and status = 'open' for update`,
@@ -377,10 +382,7 @@ async function syncStacksFromState(tableId: string, state: EngineState) {
 }
 
 async function claimHandEconomy(tableId: string, handNo: number): Promise<boolean> {
-  await sql(
-    `alter table table_runtime
-     add column if not exists economy_hand_no int not null default 0`,
-  );
+  await ensureRuntime(tableId);
   const claimed = await sql(
     `update table_runtime
      set economy_hand_no = $2
