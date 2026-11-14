@@ -91,8 +91,10 @@ export async function startTournament(tournamentId: string) {
   }
 
   let linked = false;
-  /** Net AI-float change applied for this start; reversed on abort. */
+  /** Overlay debited from AI float (negative); refunded on abort. */
   let spinFloatDelta = 0;
+  /** Buy-in surplus to house rake after the table is linked. */
+  let pendingSurplus = 0;
 
   const abortStart = async () => {
     // Only roll back our unfinished claim; never touch a linked live table.
@@ -109,11 +111,8 @@ export async function startTournament(tournamentId: string) {
       [tournamentId],
     );
     if (!reverted.length) return;
-    if (spinFloatDelta > 0) {
-      await debitBotFloat(spinFloatDelta, `spin_abort_reclaim:${tournamentId}`).catch(
-        () => undefined,
-      );
-    } else if (spinFloatDelta < 0) {
+    // Only overlay debits need reversing (surplus is deferred until link succeeds).
+    if (spinFloatDelta < 0) {
       await creditBotFloat(-spinFloatDelta, `spin_abort_refund:${tournamentId}`);
     }
     spinFloatDelta = 0;
@@ -178,8 +177,8 @@ export async function startTournament(tournamentId: string) {
           prizePool = collected;
         }
       } else if (overlay < 0) {
-        await creditBotFloat(-overlay, `spin_surplus:${tournamentId}`);
-        spinFloatDelta = -overlay;
+        // Defer house take until link succeeds so abort cannot leak float credits.
+        pendingSurplus = -overlay;
       }
       await sql(
         `update tournaments set spin_multiplier = $2 where id = $1`,
@@ -234,6 +233,16 @@ export async function startTournament(tournamentId: string) {
       throw new Error("Tournament already started or finished");
     }
     linked = true;
+    spinFloatDelta = 0;
+    if (pendingSurplus > 0) {
+      await sql(
+        `update club_rake
+         set total_rake = total_rake + $1, updated_at = now()
+         where club_id = $2`,
+        [pendingSurplus, DEFAULT_CLUB_ID],
+      );
+      pendingSurplus = 0;
+    }
 
     const rows = await listTournaments();
     return rows.find((t) => t.id === tournamentId)!;
