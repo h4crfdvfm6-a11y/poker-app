@@ -454,6 +454,17 @@ async function applyHandEconomy(tableId: string, state: EngineState) {
     }
   }
   await syncStacksFromState(tableId, state);
+  // Persist BBJP/rake-side stack mutations so closeTable showdown cash-out
+  // cannot drop awards that only lived in memory / table_seats.
+  await sql(
+    `update table_runtime r
+     set state_json = $2, updated_at = now()
+     from cash_tables t
+     where r.table_id = $1
+       and t.id = r.table_id
+       and t.status = 'open'`,
+    [tableId, JSON.stringify(state)],
+  );
 }
 
 function maskMemberId(
@@ -863,9 +874,13 @@ export async function sitAtTable(
     );
   }
   const runtime = await readRuntime(tableId);
-  // Block sit during showdown/settlement so a new occupant cannot inherit
-  // post-award stacks stamped by seat_no before member_id is checked.
-  if (runtime.state && runtime.state.street !== "waiting") {
+  // Between hands only (waiting/showdown). member_id-scoped sync prevents
+  // inheriting another player's post-award stack on the same seat_no.
+  if (
+    runtime.state &&
+    runtime.state.street !== "waiting" &&
+    runtime.state.street !== "showdown"
+  ) {
     throw new Error("Wait for the hand to finish");
   }
   const seats = await getSeats(tableId);
@@ -925,13 +940,24 @@ export async function sitAtTable(
 }
 
 export async function leaveTable(tableId: string, memberId: string) {
-  const runtime = await readRuntime(tableId);
-  // Waiting only — showdown settlement may still be banking squid / BBJP onto
-  // stacks; leaving mid-window can cash pre-award seats while pot is cleared.
-  if (runtime.state && runtime.state.street !== "waiting") {
+  let runtime = await readRuntime(tableId);
+  // Allow leave on showdown (between-hand pause) as well as waiting — continuous
+  // tables never linger on waiting when ≥2 stacks remain.
+  if (
+    runtime.state &&
+    runtime.state.street !== "waiting" &&
+    runtime.state.street !== "showdown"
+  ) {
     throw new Error("Wait for the hand to finish");
   }
   const table = await getTable(tableId);
+  // Finish idempotent settlement first so cash-out includes squid/BBJP awards.
+  if (runtime.state?.street === "showdown" && runtime.state.result) {
+    await bankSquidAnte(tableId, runtime.state, table);
+    await settleSquidShowdown(tableId, runtime.state, table);
+    await applyHandEconomy(tableId, runtime.state);
+    runtime = await readRuntime(tableId);
+  }
   // Capture pre-clear stack/is_bot — RETURNING * after SET would always be 0/false.
   const claimed = await sql<{
     stack: string | number;
@@ -959,7 +985,10 @@ export async function leaveTable(tableId: string, memberId: string) {
   );
   if (!claimed.length) throw new Error("Not seated");
   const seat = claimed[0]!;
-  const stack = num(seat.stack);
+  const stateStack = Number(
+    runtime.state?.seats.find((s) => s.memberId === memberId)?.stack ?? 0,
+  );
+  const stack = Math.max(num(seat.stack), stateStack);
   const wasBot = seat.is_bot;
   const isTournament = table.format === "tournament";
   // Tournament chips are not club chips — leaving forfeits the stack.
@@ -983,7 +1012,11 @@ export async function addBot(tableId: string, seatNo?: number) {
   }
   await ensureRuntime(tableId);
   const runtime = await readRuntime(tableId);
-  if (runtime.state && runtime.state.street !== "waiting") {
+  if (
+    runtime.state &&
+    runtime.state.street !== "waiting" &&
+    runtime.state.street !== "showdown"
+  ) {
     throw new Error("Wait for the hand to finish");
   }
   const seats = await getSeats(tableId);

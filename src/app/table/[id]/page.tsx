@@ -247,11 +247,12 @@ export default function TablePage() {
   }, [view?.hand?.handNo, view?.hand?.result]);
 
   const seated = view?.meSeat != null;
-  const handInProgress = Boolean(
-    view?.hand && view.hand.street !== "waiting",
-  );
-  const canLeave = seated && !handInProgress;
-  const canSit = !seated && !handInProgress;
+  const betweenHands =
+    !view?.hand ||
+    view.hand.street === "waiting" ||
+    view.hand.street === "showdown";
+  const canLeave = seated && betweenHands;
+  const canSit = !seated && betweenHands;
 
   async function sit(seat: number) {
     setBusy(true);
