@@ -18,6 +18,8 @@ export type OfcSeat = {
   front: Card[];
   middle: Card[];
   back: Card[];
+  /** This hand is Fantasyland (14-card set). */
+  inFantasy: boolean;
   /** Next hand starts in Fantasyland after QQ+ / trips front. */
   fantasyNext: boolean;
   fouled: boolean;
@@ -98,7 +100,8 @@ export function startOfcHand(
       front: [],
       middle: [],
       back: [],
-      fantasyNext: Boolean(s.fantasy),
+      inFantasy: Boolean(s.fantasy),
+      fantasyNext: false,
       fouled: false,
     }));
 
@@ -122,11 +125,15 @@ export function startOfcHand(
     return state;
   }
 
-  // Initial 5 to the first actor (button+1), sequential set — ClubGG style
-  // progressive: each player sets their 5 before the next is dealt.
+  // Progressive set: Fantasyland gets 14; otherwise initial 5, then pineapple 3s.
   const first = nextOfcSeat(state, opts.button) ?? seats[0]!.seat;
-  dealDraft(state, first, 5);
-  pushLog(state, `OFC hand #${opts.handNo} · set 5`);
+  const firstSeat = seats.find((s) => s.seat === first)!;
+  const dealN = firstSeat.inFantasy ? 14 : 5;
+  dealDraft(state, first, dealN);
+  pushLog(
+    state,
+    `OFC hand #${opts.handNo} · ${firstSeat.inFantasy ? "Fantasyland 14" : "set 5"}`,
+  );
   return state;
 }
 
@@ -172,7 +179,16 @@ export function applyOfcSet(
   if (!seat) throw new Error("Seat not found");
 
   const draft = state.draft;
-  if (draft.length === 5) {
+  if (draft.length === 14) {
+    if (placements.length !== 13) throw new Error("Set 13, discard 1");
+    if (discardIndex == null || discardIndex < 0 || discardIndex > 13) {
+      throw new Error("Discard required");
+    }
+    if (placements.some((p) => p.cardIndex === discardIndex)) {
+      throw new Error("Cannot place discarded card");
+    }
+    placeCards(seat, draft, placements);
+  } else if (draft.length === 5) {
     if (placements.length !== 5) throw new Error("Set all 5 cards");
     if (discardIndex != null) throw new Error("No discard on first deal");
     placeCards(seat, draft, placements);
@@ -211,7 +227,8 @@ export function applyOfcSet(
   }
   state.dealRound += 1;
   const nextSeat = state.seats.find((s) => s.seat === next)!;
-  const dealN = setCount(nextSeat) === 0 ? 5 : 3;
+  const dealN =
+    setCount(nextSeat) === 0 ? (nextSeat.inFantasy ? 14 : 5) : 3;
   dealDraft(state, next, dealN);
   return state;
 }
@@ -229,7 +246,9 @@ function scoreFrontRoyalties(score: HandScore): number {
 
 function scoreFiveRoyalties(score: HandScore, middle: boolean): number {
   const cat = score[0] ?? 0;
-  // Middle royalties are higher; back is standard.
+  const high = score[1] ?? 0;
+  // Royal flush (A-high SF) pays more than a normal straight flush.
+  if (cat === 8 && high === 14) return middle ? 50 : 25;
   const table: Record<number, number> = middle
     ? { 3: 2, 4: 4, 5: 8, 6: 12, 7: 20, 8: 30 }
     : { 4: 2, 5: 4, 6: 6, 7: 10, 8: 15 };
@@ -303,15 +322,22 @@ export function finishOfc(state: OfcState) {
           scoreFiveRoyalties(ab, false) -
           scoreFiveRoyalties(bb, false);
       }
-      const chips = pts * state.unit;
-      deltas[a.memberId] = (deltas[a.memberId] || 0) + chips;
-      deltas[b.memberId] = (deltas[b.memberId] || 0) - chips;
+      // Cap transfer to the paying stack — never mint unbacked chips.
+      const want = pts * state.unit;
+      if (want > 0) {
+        const paid = Math.min(want, b.stack);
+        b.stack -= paid;
+        a.stack += paid;
+        deltas[a.memberId] = (deltas[a.memberId] || 0) + paid;
+        deltas[b.memberId] = (deltas[b.memberId] || 0) - paid;
+      } else if (want < 0) {
+        const paid = Math.min(-want, a.stack);
+        a.stack -= paid;
+        b.stack += paid;
+        deltas[b.memberId] = (deltas[b.memberId] || 0) + paid;
+        deltas[a.memberId] = (deltas[a.memberId] || 0) - paid;
+      }
     }
-  }
-
-  for (const s of state.seats) {
-    const d = deltas[s.memberId] || 0;
-    s.stack = Math.max(0, s.stack + d);
   }
 
   state.result = {
@@ -343,6 +369,32 @@ export function decideOfcBot(
   const ranked = draft
     .map((c, i) => ({ c, i }))
     .sort((a, b) => b.c.r - a.c.r);
+
+  if (draft.length === 14) {
+    const discardIndex = ranked[13]!.i;
+    const keep = ranked.slice(0, 13);
+    // Fill back 5, middle 5, front 3 from strongest kept cards.
+    const rows: OfcRow[] = [
+      "back",
+      "back",
+      "back",
+      "back",
+      "back",
+      "middle",
+      "middle",
+      "middle",
+      "middle",
+      "middle",
+      "front",
+      "front",
+      "front",
+    ];
+    const placements = keep.map((item, idx) => ({
+      cardIndex: item.i,
+      row: rows[idx]!,
+    }));
+    return repairPlacements(seat, draft, placements, discardIndex);
+  }
 
   if (draft.length === 5) {
     const placements: OfcPlacement[] = [];

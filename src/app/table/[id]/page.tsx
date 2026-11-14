@@ -74,13 +74,15 @@ type TableView = {
       rake?: number;
       bbjpFee?: number;
       bbjpHit?: unknown;
-      deltas?: Record<string, number>;
       rows?: Array<{
-        memberId: string;
+        seat?: number;
+        memberId: string | null;
         front: string;
         middle: string;
         back: string;
         fouled: boolean;
+        fantasyNext?: boolean;
+        delta?: number;
       }>;
     };
     cucurucho?: boolean;
@@ -331,6 +333,30 @@ export default function TablePage() {
     for (let i = 0; i < caps.back; i++) order.push("back");
     for (let i = 0; i < caps.middle; i++) order.push("middle");
     for (let i = 0; i < caps.front; i++) order.push("front");
+    if (draft.length === 14) {
+      // Fantasyland: set 13, discard weakest (last index after rank sort in bot;
+      // here discard the last dealt card as a simple client default).
+      const discardIndex = 13;
+      const placements = Array.from({ length: 13 }, (_, i) => ({
+        cardIndex: i,
+        row: (order[i] || "front") as "front" | "middle" | "back",
+      }));
+      setBusy(true);
+      setError("");
+      const res = await fetch(`/api/table/${tableId}/action`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "ofc_set", placements, discardIndex }),
+      });
+      const json = await res.json();
+      setBusy(false);
+      if (!res.ok) {
+        setError(json.error || "OFC set failed");
+        return;
+      }
+      setView(json);
+      return;
+    }
     if (draft.length === 5) {
       const placements = draft.map((_, i) => ({
         cardIndex: i,
@@ -691,12 +717,14 @@ export default function TablePage() {
       {view.hand?.mode === "ofc" && view.hand.result?.rows ? (
         <div className="panel mb-3 p-3 text-sm">
           <div className="mb-1 font-semibold text-[var(--gold-strong)]">OFC result</div>
-          {view.hand.result.rows.map((r) => (
-            <div key={r.memberId} className="text-xs text-[var(--muted)]">
-              {r.fouled ? "Foul · " : ""}
-              F {r.front} · M {r.middle} · B {r.back}
-              {view.hand?.result?.deltas?.[r.memberId] != null
-                ? ` · ${view.hand.result.deltas[r.memberId]! >= 0 ? "+" : ""}${view.hand.result.deltas[r.memberId]}`
+          {view.hand.result.rows.map((r, i) => (
+            <div key={r.seat ?? i} className="text-xs text-[var(--muted)]">
+              Seat {(r.seat ?? i) + 1}
+              {r.fouled ? " · Foul" : ""}
+              {r.fantasyNext ? " · Fantasy next" : ""} · F {r.front} · M {r.middle} · B{" "}
+              {r.back}
+              {r.delta != null
+                ? ` · ${r.delta >= 0 ? "+" : ""}${r.delta}`
                 : ""}
             </div>
           ))}

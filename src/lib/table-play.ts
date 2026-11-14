@@ -514,7 +514,24 @@ function maskState(state: RuntimeState | null, viewerMemberId: string | null) {
       pot: 0,
       pots: [] as Array<{ amount: number }>,
       log: state.log.slice(-12),
-      result: state.result,
+      result: state.result
+        ? {
+            rows: state.result.rows.map((r) => {
+              const seatNo =
+                state.seats.find((s) => s.memberId === r.memberId)?.seat ?? -1;
+              return {
+                seat: seatNo,
+                memberId: maskMemberId(r.memberId, viewerMemberId),
+                front: r.front,
+                middle: r.middle,
+                back: r.back,
+                fouled: r.fouled,
+                fantasyNext: r.fantasyNext,
+                delta: state.result!.deltas[r.memberId] || 0,
+              };
+            }),
+          }
+        : null,
       cucurucho: false,
       draft:
         state.toAct != null &&
