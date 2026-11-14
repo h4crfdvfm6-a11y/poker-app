@@ -8,8 +8,15 @@ type Overview = {
   members: number;
   openTables: number;
   activeTournaments: number;
-  bbjp: { balance: string; enabled: boolean; trigger_hand: string };
+  bbjp: {
+    balance: string;
+    enabled: boolean;
+    trigger_hand: string;
+    cycle_collections?: number;
+    minimum_hand?: string;
+  };
   totalRake: number;
+  botFloat?: number;
 };
 
 type Member = {
@@ -22,12 +29,15 @@ type Member = {
 type Table = {
   id: string;
   title: string;
+  game_type?: string;
   sb: string | number;
   bb: string | number;
   seats: number;
   rake_percent: string | number;
   rake_cap_bb: string | number;
   bbjp_enabled: boolean;
+  squid_enabled?: boolean;
+  squid_target?: number;
   status: string;
 };
 
@@ -49,6 +59,8 @@ type Bbjp = {
   balance: string;
   enabled: boolean;
   trigger_hand: string;
+  cycle_collections: number;
+  minimum_hand: string;
   topups: Array<{ id: string; amount: string; created_at: string }>;
 };
 
@@ -75,7 +87,8 @@ export default function AdminPage() {
   const [sendAmount, setSendAmount] = useState("1000");
 
   const [tableForm, setTableForm] = useState({
-    title: "NLH 25/50",
+    title: "",
+    gameType: "NLH",
     sb: "25",
     bb: "50",
     seats: "6",
@@ -85,6 +98,8 @@ export default function AdminPage() {
     rakeCapBb: "3",
     bbjpEnabled: true,
     isPrivate: false,
+    squidEnabled: false,
+    squidTarget: "3",
   });
 
   const [mttForm, setMttForm] = useState({
@@ -94,10 +109,12 @@ export default function AdminPage() {
     startingStack: "10000",
     maxPlayers: "9",
     blindMinutes: "5",
+    kind: "mtt",
   });
   const [mttBusy, setMttBusy] = useState(false);
 
   const [bbjpAmount, setBbjpAmount] = useState("1000");
+  const [botFloatAmount, setBotFloatAmount] = useState("50000");
 
   const refresh = useCallback(async () => {
     const ov = await fetch("/api/admin/overview", { cache: "no-store" });
@@ -184,6 +201,25 @@ export default function AdminPage() {
     await refresh();
   }
 
+  async function sendGems(e: FormEvent) {
+    e.preventDefault();
+    setError("");
+    const res = await fetch("/api/admin/gems", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        memberId: sendMemberId,
+        amount: Number(sendAmount),
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setError(json.error || "Could not send gems");
+      return;
+    }
+    await refresh();
+  }
+
   async function openTable(e: FormEvent) {
     e.preventDefault();
     setError("");
@@ -192,6 +228,7 @@ export default function AdminPage() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         title: tableForm.title,
+        gameType: tableForm.gameType,
         sb: Number(tableForm.sb),
         bb: Number(tableForm.bb),
         seats: Number(tableForm.seats),
@@ -201,6 +238,8 @@ export default function AdminPage() {
         rakeCapBb: Number(tableForm.rakeCapBb),
         bbjpEnabled: tableForm.bbjpEnabled,
         isPrivate: tableForm.isPrivate,
+        squidEnabled: tableForm.squidEnabled,
+        squidTarget: Number(tableForm.squidTarget),
       }),
     });
     const json = await res.json();
@@ -232,6 +271,7 @@ export default function AdminPage() {
         startingStack: Number(mttForm.startingStack),
         maxPlayers: Number(mttForm.maxPlayers),
         blindMinutes: Number(mttForm.blindMinutes),
+        kind: mttForm.kind,
       }),
     });
     const json = await res.json();
@@ -359,11 +399,12 @@ export default function AdminPage() {
             ["Open tables", overview.openTables],
             ["Tournaments", overview.activeTournaments],
             ["Club rake", money(overview.totalRake)],
+            ["AI float", money(overview.botFloat ?? 0)],
             ["BBJP", money(overview.bbjp.balance)],
             ["BBJP status", overview.bbjp.enabled ? "On" : "Off"],
           ].map(([label, value]) => (
             <div key={String(label)} className="panel p-4">
-              <div className="text-xs uppercase tracking-wider text-[var(--muted)]">
+              <div className="text-xs uppercase tracking-wide text-[var(--muted)]">
                 {label}
               </div>
               <div className="brand mt-1 text-2xl text-[var(--gold-strong)]">
@@ -371,6 +412,40 @@ export default function AdminPage() {
               </div>
             </div>
           ))}
+          <form
+            className="panel grid gap-2 p-4 md:col-span-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setError("");
+              const res = await fetch("/api/admin/bot-float", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ amount: Number(botFloatAmount) }),
+              });
+              const json = await res.json();
+              if (!res.ok) {
+                setError(json.error || "Could not top up AI float");
+                return;
+              }
+              await refresh();
+            }}
+          >
+            <h2 className="brand text-lg">Top up AI float</h2>
+            <p className="text-sm text-[var(--muted)]">
+              AI buy-ins are funded from this float — not minted from nowhere.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <input
+                className="field !w-36"
+                type="number"
+                value={botFloatAmount}
+                onChange={(e) => setBotFloatAmount(e.target.value)}
+              />
+              <button className="btn btn-gold !py-2" type="submit">
+                Add to float
+              </button>
+            </div>
+          </form>
         </section>
       ) : null}
 
@@ -402,7 +477,7 @@ export default function AdminPage() {
           </form>
 
           <form onSubmit={sendChips} className="panel grid gap-3 p-4">
-            <h2 className="brand text-xl">Send chips</h2>
+            <h2 className="brand text-xl">Send chips / gems</h2>
             <div>
               <label className="label">Player</label>
               <select
@@ -427,9 +502,14 @@ export default function AdminPage() {
                 required
               />
             </div>
-            <button className="btn btn-gold" type="submit">
-              Send / recall chips
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button className="btn btn-gold" type="submit">
+                Chips
+              </button>
+              <button className="btn btn-ghost" type="button" onClick={sendGems}>
+                Gems
+              </button>
+            </div>
           </form>
 
           <div className="grid gap-2">
@@ -454,9 +534,30 @@ export default function AdminPage() {
           <form onSubmit={openTable} className="panel grid gap-3 p-4">
             <h2 className="brand text-xl">Open table</h2>
             <div>
-              <label className="label">Title</label>
+              <label className="label">Game</label>
+              <select
+                className="field"
+                value={tableForm.gameType}
+                onChange={(e) =>
+                  setTableForm((s) => ({ ...s, gameType: e.target.value }))
+                }
+              >
+                <option value="NLH">No-Limit Hold&apos;em</option>
+                <option value="PLO">Pot-Limit Omaha (4)</option>
+                <option value="PLO5">Pot-Limit Omaha 5</option>
+                <option value="PLO6">Pot-Limit Omaha 6</option>
+                <option value="PLO_HILO">PLO Hi-Lo</option>
+                <option value="SHORT_DECK">Short Deck (6+)</option>
+                <option value="AOF_NLH">All-in or Fold Hold&apos;em</option>
+                <option value="AOF_PLO">All-in or Fold Omaha</option>
+                <option value="BOMB_NLH">Bomb Pot Hold&apos;em</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Title (optional)</label>
               <input
                 className="field"
+                placeholder="Auto from game + blinds"
                 value={tableForm.title}
                 onChange={(e) =>
                   setTableForm((s) => ({ ...s, title: e.target.value }))
@@ -562,6 +663,37 @@ export default function AdminPage() {
                 />
                 BBJP on this table
               </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={tableForm.squidEnabled}
+                  onChange={(e) =>
+                    setTableForm((s) => ({
+                      ...s,
+                      squidEnabled: e.target.checked,
+                    }))
+                  }
+                />
+                Squid game (1 BB ante)
+              </label>
+              {tableForm.squidEnabled ? (
+                <div>
+                  <label className="label">Squid target</label>
+                  <input
+                    className="field"
+                    type="number"
+                    min={1}
+                    max={9}
+                    value={tableForm.squidTarget}
+                    onChange={(e) =>
+                      setTableForm((s) => ({
+                        ...s,
+                        squidTarget: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              ) : null}
             </div>
             <button className="btn btn-gold" type="submit">
               Create table with rake
@@ -576,11 +708,15 @@ export default function AdminPage() {
                   <span className="chip">{t.status}</span>
                 </div>
                 <p className="text-sm text-[var(--muted)]">
-                  {money(t.sb)}/{money(t.bb)} · {t.seats}-max
+                  {t.game_type || "NLH"} · {money(t.sb)}/{money(t.bb)} ·{" "}
+                  {t.seats}-max
                 </p>
                 <p className="text-sm text-[var(--gold)]">
                   Rake {Number(t.rake_percent)}% / {Number(t.rake_cap_bb)} BB
                   {t.bbjp_enabled ? " · BBJP" : ""}
+                  {t.squid_enabled
+                    ? ` · Squid ${t.squid_target || 3}`
+                    : ""}
                 </p>
                 {t.status === "open" ? (
                   <button
@@ -600,6 +736,32 @@ export default function AdminPage() {
         <section className="grid gap-4">
           <form onSubmit={createMtt} className="panel grid gap-3 p-4">
             <h2 className="brand text-xl">Create tournament</h2>
+            <div>
+              <label className="label">Format</label>
+              <select
+                className="field"
+                value={mttForm.kind}
+                onChange={(e) =>
+                  setMttForm((s) => ({
+                    ...s,
+                    kind: e.target.value,
+                    title:
+                      e.target.value === "spin"
+                        ? "Spin & Gold"
+                        : s.title === "Spin & Gold"
+                          ? "Tuesday League"
+                          : s.title,
+                    maxPlayers: e.target.value === "spin" ? "3" : s.maxPlayers,
+                    startingStack:
+                      e.target.value === "spin" ? "500" : s.startingStack,
+                    blindMinutes: e.target.value === "spin" ? "1" : s.blindMinutes,
+                  }))
+                }
+              >
+                <option value="mtt">MTT / Sit &amp; Go</option>
+                <option value="spin">Spin &amp; Gold (3-max)</option>
+              </select>
+            </div>
             <div>
               <label className="label">Title</label>
               <input
@@ -726,7 +888,12 @@ export default function AdminPage() {
               {money(bbjp.balance)}
             </div>
             <p className="bbjp-meta mt-2 text-sm">
-              {bbjp.enabled ? "Enabled" : "Disabled"} · trigger {bbjp.trigger_hand}
+              {bbjp.enabled ? "Enabled" : "Disabled"} · minimum{" "}
+              {bbjp.minimum_hand || bbjp.trigger_hand}
+            </p>
+            <p className="bbjp-meta mt-1 text-sm">
+              Cycle collections {money(bbjp.cycle_collections ?? 0)} (ladder, not
+              balance)
             </p>
             <div className="mt-4 flex gap-2">
               {bbjp.enabled ? (
@@ -756,7 +923,8 @@ export default function AdminPage() {
           >
             <h2 className="brand text-xl">Top up BBJP</h2>
             <p className="text-sm text-[var(--muted)]">
-              Minimum 100 chips. Top-ups cannot be withdrawn.
+              Minimum 100 chips. Top-ups raise the pool and the collections
+              ladder. After an award the ladder resets toward AAAKK.
             </p>
             <input
               className="field"
@@ -770,18 +938,32 @@ export default function AdminPage() {
           </form>
 
           <div className="panel p-4">
-            <h2 className="brand mb-3 text-xl">Trigger hand</h2>
-            <div className="flex flex-wrap gap-2">
-              {["AAA22", "AAA88", "AAAJJ", "AAAKK"].map((hand) => (
-                <button
-                  key={hand}
-                  className={`btn !py-2 !text-sm ${
-                    bbjp.trigger_hand === hand ? "btn-gold" : "btn-ghost"
+            <h2 className="brand mb-2 text-xl">Collections ladder</h2>
+            <p className="mb-3 text-sm text-[var(--muted)]">
+              Minimum losing hand follows jackpot-cycle collections (£50 bands).
+              Current: {bbjp.minimum_hand || bbjp.trigger_hand}
+            </p>
+            <div className="grid gap-1 text-sm">
+              {[
+                ["0–50", "AAAKK"],
+                ["51–100", "AAAQQ"],
+                ["101–150", "AAAJJ"],
+                ["151–200", "AAA1010"],
+                ["201–250", "AAA99"],
+                ["251–300", "AAA88"],
+                ["…", "down to AAA22"],
+              ].map(([band, hand]) => (
+                <div
+                  key={band}
+                  className={`flex justify-between rounded-lg px-3 py-2 ${
+                    hand === (bbjp.minimum_hand || bbjp.trigger_hand)
+                      ? "bg-[rgba(93,202,134,0.2)]"
+                      : "bg-black/15"
                   }`}
-                  onClick={() => bbjpAction("trigger", { triggerHand: hand })}
                 >
-                  {hand}
-                </button>
+                  <span className="text-[var(--muted)]">{band}</span>
+                  <span className="font-semibold">{hand}</span>
+                </div>
               ))}
             </div>
           </div>

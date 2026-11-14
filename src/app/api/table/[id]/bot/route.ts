@@ -1,29 +1,21 @@
-import { getPlayerId, isAdmin } from "@/lib/session";
+import { assertSameOrigin } from "@/lib/csrf";
+import { isAdmin } from "@/lib/session";
 import { addBot } from "@/lib/table-play";
-import { sql } from "@/lib/db";
 
+/** AI seats are admin-controlled and funded from the club bot float. */
 export async function POST(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await ctx.params;
-  const playerId = await getPlayerId();
-  const admin = await isAdmin();
-  if (!playerId && !admin) {
-    return Response.json({ error: "Join the club first" }, { status: 401 });
-  }
+  const csrf = assertSameOrigin(request);
+  if (csrf) return csrf;
 
-  if (playerId && !admin) {
-    const seated = await sql(
-      `select 1 from table_seats where table_id = $1 and member_id = $2`,
-      [id, playerId],
+  const { id } = await ctx.params;
+  if (!(await isAdmin())) {
+    return Response.json(
+      { error: "Only club admin can seat AI players" },
+      { status: 403 },
     );
-    if (!seated.length) {
-      return Response.json(
-        { error: "Sit at the table before adding AI seats" },
-        { status: 403 },
-      );
-    }
   }
 
   const body = (await request.json().catch(() => ({}))) as { seat?: number };

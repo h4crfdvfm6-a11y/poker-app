@@ -33,8 +33,8 @@ export default function HomePage() {
             <Link href="/lobby" className="btn btn-gold">
               Enter club lobby
             </Link>
-            <Link href="/admin" className="btn btn-ghost">
-              Admin panel
+            <Link href="/shop" className="btn btn-ghost">
+              Shop skins & chips
             </Link>
           </div>
         </div>
@@ -42,9 +42,9 @@ export default function HomePage() {
 
       <section className="mt-6 grid gap-3">
         {[
-          ["Tables + rake", "Set blinds, buy-in, fee %, cap, and BBJP flag."],
-          ["Tournaments", "Schedule MTTs with buy-in, fee, and blind levels."],
-          ["Players + chips", "Add members and send club chips like ClubGG."],
+          ["Virtual economy", "Gems buy chips, table skins, avatars — never cash out."],
+          ["Tables + rake", "NLH, PLO, Short Deck, AoF, Bomb Pot and more."],
+          ["Coach practice", "Learn off the live table with beginner tips."],
         ].map(([title, copy]) => (
           <div key={title} className="panel px-4 py-4">
             <div className="mb-1 font-semibold text-[var(--gold-strong)]">

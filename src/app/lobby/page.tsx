@@ -8,12 +8,15 @@ type LobbyData = {
   tables: Array<{
     id: string;
     title: string;
+    game_type?: string;
     sb: string | number;
     bb: string | number;
     seats: number;
     rake_percent: string | number;
     rake_cap_bb: string | number;
     bbjp_enabled: boolean;
+    squid_enabled?: boolean;
+    squid_target?: number;
     buyin_min: string | number;
     buyin_max: string | number;
   }>;
@@ -30,7 +33,13 @@ type LobbyData = {
     prize_pool?: string | number;
     blind_level?: number;
   }>;
-  bbjp: { balance: string | number; enabled: boolean; trigger_hand: string };
+  bbjp: {
+    balance: string | number;
+    enabled: boolean;
+    trigger_hand: string;
+    cycle_collections?: number;
+    minimum_hand?: string;
+  };
   me: { id: string; display_name: string; chip_balance: string | number } | null;
   myTournamentIds: string[];
 };
@@ -112,9 +121,17 @@ export default function LobbyPage() {
           </Link>
           <p className="mt-1 text-sm text-[var(--muted)]">{data.club.name}</p>
         </div>
-        <Link href="/admin" className="btn btn-ghost !py-2 !text-sm">
-          Admin
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/shop" className="btn btn-ghost !py-2 !text-sm">
+            Shop
+          </Link>
+          <Link href="/coach" className="btn btn-ghost !py-2 !text-sm">
+            Coach
+          </Link>
+          <Link href="/admin" className="btn btn-ghost !py-2 !text-sm">
+            Admin
+          </Link>
+        </div>
       </div>
 
       <div className="bbjp-panel mb-4 flex items-center justify-between px-4 py-3">
@@ -128,7 +145,12 @@ export default function LobbyPage() {
         </div>
         <div className="bbjp-meta text-right text-xs">
           <div>{data.bbjp.enabled ? "Live" : "Off"}</div>
-          <div>Trigger {data.bbjp.trigger_hand}</div>
+          <div>
+            Min {data.bbjp.minimum_hand || data.bbjp.trigger_hand}
+          </div>
+          <div>
+            Cycle {money(data.bbjp.cycle_collections ?? 0)}
+          </div>
         </div>
       </div>
 
@@ -186,12 +208,15 @@ export default function LobbyPage() {
                   <span className="chip">{t.seats}-max</span>
                 </div>
                 <p className="text-sm text-[var(--muted)]">
-                  Blinds {money(t.sb)}/{money(t.bb)} · Buy-in {money(t.buyin_min)}–
-                  {money(t.buyin_max)}
+                  {t.game_type || "NLH"} · Blinds {money(t.sb)}/{money(t.bb)} ·
+                  Buy-in {money(t.buyin_min)}–{money(t.buyin_max)}
                 </p>
                 <p className="mt-1 text-sm text-[var(--gold)]">
                   Rake {Number(t.rake_percent)}% / cap {Number(t.rake_cap_bb)} BB
                   {t.bbjp_enabled ? " · BBJP on" : ""}
+                  {t.squid_enabled
+                    ? ` · Squid to ${t.squid_target || 3}`
+                    : ""}
                 </p>
                 <Link
                   href={`/table/${t.id}`}

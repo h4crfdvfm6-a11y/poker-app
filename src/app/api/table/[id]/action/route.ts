@@ -1,11 +1,14 @@
 import { playerAction } from "@/lib/table-play";
 import { getPlayerId } from "@/lib/session";
 import type { ActionType } from "@/lib/poker/engine";
+import { assertSameOrigin } from "@/lib/csrf";
 
 export async function POST(
   request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  const csrf = assertSameOrigin(request);
+  if (csrf) return csrf;
   const { id } = await ctx.params;
   const playerId = await getPlayerId();
   if (!playerId) {

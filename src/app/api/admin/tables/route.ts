@@ -1,5 +1,6 @@
 import { closeTable, createTable, listTables } from "@/lib/club";
 import { requireAdmin } from "@/lib/session";
+import { assertSameOrigin } from "@/lib/csrf";
 
 export async function GET() {
   const denied = await requireAdmin();
@@ -8,10 +9,13 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const csrf = assertSameOrigin(request);
+  if (csrf) return csrf;
   const denied = await requireAdmin();
   if (denied) return denied;
   const body = (await request.json().catch(() => ({}))) as {
     title?: string;
+    gameType?: string;
     sb?: number;
     bb?: number;
     seats?: number;
@@ -21,10 +25,13 @@ export async function POST(request: Request) {
     rakeCapBb?: number;
     bbjpEnabled?: boolean;
     isPrivate?: boolean;
+    squidEnabled?: boolean;
+    squidTarget?: number;
   };
   try {
     const table = await createTable({
-      title: body.title || `NLH ${body.sb}/${body.bb}`,
+      title: body.title || "",
+      gameType: body.gameType || "NLH",
       sb: Number(body.sb ?? 25),
       bb: Number(body.bb ?? 50),
       seats: Number(body.seats ?? 6),
@@ -34,6 +41,8 @@ export async function POST(request: Request) {
       rakeCapBb: Number(body.rakeCapBb ?? 3),
       bbjpEnabled: Boolean(body.bbjpEnabled),
       isPrivate: Boolean(body.isPrivate),
+      squidEnabled: Boolean(body.squidEnabled),
+      squidTarget: Number(body.squidTarget ?? 3),
     });
     return Response.json({ table });
   } catch (error) {
@@ -45,6 +54,8 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const csrf = assertSameOrigin(request);
+  if (csrf) return csrf;
   const denied = await requireAdmin();
   if (denied) return denied;
   const { searchParams } = new URL(request.url);

@@ -2,10 +2,13 @@ import { sql } from "./db";
 import { id } from "./ids";
 import {
   DEFAULT_CLUB_ID,
+  creditBotFloat,
+  debitBotFloat,
   ensureClubSeeded,
   getTournament,
   listTournaments,
   num,
+  rollSpinMultiplier,
   sendChips,
   type Tournament,
 } from "./club";
@@ -87,6 +90,12 @@ export async function startTournament(tournamentId: string) {
     throw new Error("Tournament already started or finished");
   }
 
+  let linked = false;
+  /** Overlay debited from AI float (negative); refunded on abort. */
+  let spinFloatDelta = 0;
+  /** Buy-in surplus to house rake after the table is linked. */
+  let pendingSurplus = 0;
+
   const abortStart = async () => {
     // Only roll back our unfinished claim; never touch a linked live table.
     const reverted = await sql(
@@ -95,12 +104,18 @@ export async function startTournament(tournamentId: string) {
            table_id = null,
            blind_level = 1,
            level_started_at = null,
-           prize_pool = 0
+           prize_pool = 0,
+           spin_multiplier = null
        where id = $1 and status = 'running' and table_id is null
        returning id`,
       [tournamentId],
     );
     if (!reverted.length) return;
+    // Only overlay debits need reversing (surplus is deferred until link succeeds).
+    if (spinFloatDelta < 0) {
+      await creditBotFloat(-spinFloatDelta, `spin_abort_refund:${tournamentId}`);
+    }
+    spinFloatDelta = 0;
     await sql(
       `delete from table_runtime
        where table_id = $1
@@ -121,7 +136,6 @@ export async function startTournament(tournamentId: string) {
     );
   };
 
-  let linked = false;
   try {
     const entries = await sql<{
       member_id: string;
@@ -143,17 +157,49 @@ export async function startTournament(tournamentId: string) {
     }
 
     const seats = entries.length;
-    const prizePool = num(tournament.buy_in) * entries.length;
+    const kind = (tournament as { kind?: string }).kind || "mtt";
+    const collected = num(tournament.buy_in) * entries.length;
+    let prizePool = collected;
+    let spinMult: number | null = null;
+    if (kind === "spin") {
+      spinMult = rollSpinMultiplier();
+      // Winner-take-all prize = buy_in × multiplier. Overlay above collected
+      // buy-ins is funded from the club AI float (never mint unbacked chips).
+      prizePool = num(tournament.buy_in) * spinMult;
+      const overlay = prizePool - collected;
+      if (overlay > 0) {
+        try {
+          await debitBotFloat(overlay, `spin_overlay:${tournamentId}`);
+          spinFloatDelta = -overlay;
+        } catch {
+          // Float too low for this multiplier — fall back to breakeven (×seats).
+          spinMult = entries.length;
+          prizePool = collected;
+        }
+      } else if (overlay < 0) {
+        // Defer house take until link succeeds so abort cannot leak float credits.
+        pendingSurplus = -overlay;
+      }
+      await sql(
+        `update tournaments set spin_multiplier = $2 where id = $1`,
+        [tournamentId, spinMult],
+      );
+    }
+    const gameType =
+      (tournament as { game_type?: string }).game_type || "NLH";
 
     await sql(
       `insert into cash_tables (
         id, club_id, title, game_type, format, sb, bb, seats,
         buyin_min, buyin_max, rake_percent, rake_cap_bb, bbjp_enabled, is_private, status
-      ) values ($1,$2,$3,'NLH','tournament',$4,$5,$6,$7,$7,0,0,false,false,'open')`,
+      ) values ($1,$2,$3,$4,'tournament',$5,$6,$7,$8,$8,0,0,false,false,'open')`,
       [
         tableId,
         DEFAULT_CLUB_ID,
-        `${tournament.title} · final table`,
+        spinMult
+          ? `${tournament.title} · ×${spinMult}`
+          : `${tournament.title} · final table`,
+        gameType,
         sb,
         bb,
         seats,
@@ -187,6 +233,16 @@ export async function startTournament(tournamentId: string) {
       throw new Error("Tournament already started or finished");
     }
     linked = true;
+    spinFloatDelta = 0;
+    if (pendingSurplus > 0) {
+      await sql(
+        `update club_rake
+         set total_rake = total_rake + $1, updated_at = now()
+         where club_id = $2`,
+        [pendingSurplus, DEFAULT_CLUB_ID],
+      );
+      pendingSurplus = 0;
+    }
 
     const rows = await listTournaments();
     return rows.find((t) => t.id === tournamentId)!;
