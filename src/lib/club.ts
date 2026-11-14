@@ -8,6 +8,7 @@ import {
   type GameType,
 } from "./poker/variants";
 import { ensureOnce } from "./schema-once";
+import { ensureTablePlaySchema } from "./table-schema";
 
 export const DEFAULT_CLUB_ID = "club_fa_poker";
 const MAX_CLUB_MEMBERS = 48;
@@ -347,16 +348,7 @@ export async function createTable(input: {
   if (input.rakePercent < 0 || input.rakePercent > 20) {
     throw new Error("Rake percent must be between 0 and 20");
   }
-  await ensureOnce("table-runtime-squid-cols", async () => {
-    await sql(
-      `alter table cash_tables
-       add column if not exists squid_enabled boolean not null default false`,
-    );
-    await sql(
-      `alter table cash_tables
-       add column if not exists squid_target int not null default 3`,
-    );
-  });
+  await ensureTablePlaySchema();
   const gameType: GameType = isGameType(input.gameType ?? "NLH")
     ? (input.gameType as GameType)
     : "NLH";
@@ -425,16 +417,7 @@ export async function closeTable(tableId: string) {
     squidPaidOut?: number;
   };
 
-  await ensureOnce("table-runtime-squid-cols", async () => {
-    await sql(
-      `alter table table_runtime
-       add column if not exists squid_json text not null default '{}'`,
-    );
-    await sql(
-      `alter table table_runtime
-       add column if not exists squid_ante_hand_no int not null default 0`,
-    );
-  });
+  await ensureTablePlaySchema();
 
   // Freeze runtime in one shot: capture state/squid, clear squid so late banks
   // cannot write after this (banks require status=open, already claimed closed).

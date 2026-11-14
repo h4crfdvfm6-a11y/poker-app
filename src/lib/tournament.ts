@@ -90,6 +90,10 @@ export async function startTournament(tournamentId: string) {
     throw new Error("Tournament already started or finished");
   }
 
+  let linked = false;
+  /** Net AI-float change applied for this start; reversed on abort. */
+  let spinFloatDelta = 0;
+
   const abortStart = async () => {
     // Only roll back our unfinished claim; never touch a linked live table.
     const reverted = await sql(
@@ -98,12 +102,21 @@ export async function startTournament(tournamentId: string) {
            table_id = null,
            blind_level = 1,
            level_started_at = null,
-           prize_pool = 0
+           prize_pool = 0,
+           spin_multiplier = null
        where id = $1 and status = 'running' and table_id is null
        returning id`,
       [tournamentId],
     );
     if (!reverted.length) return;
+    if (spinFloatDelta > 0) {
+      await debitBotFloat(spinFloatDelta, `spin_abort_reclaim:${tournamentId}`).catch(
+        () => undefined,
+      );
+    } else if (spinFloatDelta < 0) {
+      await creditBotFloat(-spinFloatDelta, `spin_abort_refund:${tournamentId}`);
+    }
+    spinFloatDelta = 0;
     await sql(
       `delete from table_runtime
        where table_id = $1
@@ -124,7 +137,6 @@ export async function startTournament(tournamentId: string) {
     );
   };
 
-  let linked = false;
   try {
     const entries = await sql<{
       member_id: string;
@@ -159,6 +171,7 @@ export async function startTournament(tournamentId: string) {
       if (overlay > 0) {
         try {
           await debitBotFloat(overlay, `spin_overlay:${tournamentId}`);
+          spinFloatDelta = -overlay;
         } catch {
           // Float too low for this multiplier — fall back to breakeven (×seats).
           spinMult = entries.length;
@@ -166,6 +179,7 @@ export async function startTournament(tournamentId: string) {
         }
       } else if (overlay < 0) {
         await creditBotFloat(-overlay, `spin_surplus:${tournamentId}`);
+        spinFloatDelta = -overlay;
       }
       await sql(
         `update tournaments set spin_multiplier = $2 where id = $1`,

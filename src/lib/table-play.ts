@@ -1,6 +1,6 @@
 import { sql, withTransaction } from "./db";
 import { id } from "./ids";
-import { ensureOnce } from "./schema-once";
+import { ensureTablePlaySchema } from "./table-schema";
 import {
   DEFAULT_CLUB_ID,
   bumpBbjpCollections,
@@ -76,32 +76,7 @@ export type SquidRuntime = {
 };
 
 async function ensureRuntime(tableId: string) {
-  await ensureOnce("table-runtime-squid-cols", async () => {
-    await sql(
-      `alter table table_runtime
-       add column if not exists squid_json text not null default '{}'`,
-    );
-    await sql(
-      `alter table table_runtime
-       add column if not exists squid_hand_no int not null default 0`,
-    );
-    await sql(
-      `alter table table_runtime
-       add column if not exists squid_ante_hand_no int not null default 0`,
-    );
-    await sql(
-      `alter table table_runtime
-       add column if not exists economy_hand_no int not null default 0`,
-    );
-    await sql(
-      `alter table cash_tables
-       add column if not exists squid_enabled boolean not null default false`,
-    );
-    await sql(
-      `alter table cash_tables
-       add column if not exists squid_target int not null default 3`,
-    );
-  });
+  await ensureTablePlaySchema();
   const rows = await sql("select table_id from table_runtime where table_id = $1", [
     tableId,
   ]);
