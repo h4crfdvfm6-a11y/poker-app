@@ -481,13 +481,10 @@ export async function closeTable(tableId: string) {
   const atShowdown =
     Boolean(state?.seats?.length) && street === "showdown";
 
-  if ((midHand || atShowdown) && state?.seats) {
-    // Prefer runtime stacks (include post-settle squid/BBJP awards on showdown).
-    // Mid-hand also refunds street bets; showdown bets are already in pots/result.
+  if (midHand && state?.seats) {
+    // Live pot chips live in runtime — refund stack+bet and return side pots.
     for (const seat of state.seats) {
-      const refund = midHand
-        ? Math.max(0, Number(seat.stack || 0) + Number(seat.bet || 0))
-        : Math.max(0, Number(seat.stack || 0));
+      const refund = Math.max(0, Number(seat.stack || 0) + Number(seat.bet || 0));
       if (refund <= 0 || !seat.memberId) continue;
       if (seat.isBot) {
         await creditBotFloat(refund, `bot_table_close:${tableId}`);
@@ -495,16 +492,13 @@ export async function closeTable(tableId: string) {
         await sendChips(seat.memberId, refund, `table_close_cashout:${tableId}`);
       }
     }
-    if (midHand) {
-      const potLeft = (state.pots || []).reduce(
-        (sum, pot) => sum + Math.max(0, Number(pot.amount || 0)),
-        0,
-      );
-      if (potLeft > 0) {
-        await creditBotFloat(potLeft, `table_close_pot:${tableId}`);
-      }
+    const potLeft = (state.pots || []).reduce(
+      (sum, pot) => sum + Math.max(0, Number(pot.amount || 0)),
+      0,
+    );
+    if (potLeft > 0) {
+      await creditBotFloat(potLeft, `table_close_pot:${tableId}`);
     }
-    // Clear seats with member_id CAS so a concurrent leave cannot double-cash.
     await sql(
       `with old as (
          select table_id, seat_no, member_id
@@ -519,6 +513,52 @@ export async function closeTable(tableId: string) {
          and t.member_id = old.member_id`,
       [tableId],
     );
+  } else if (atShowdown && state?.seats) {
+    // Pay only players still in table_seats (leave already cashed + cleared).
+    // Use max(seat, state) so BBJP/squid awards on state_json are included,
+    // and showdown sitters (seats only) keep their buy-in.
+    const stateStack = new Map<string, number>();
+    for (const seat of state.seats) {
+      if (!seat.memberId) continue;
+      stateStack.set(
+        seat.memberId,
+        Math.max(0, Number(seat.stack || 0)),
+      );
+    }
+    const seated = await sql<{
+      member_id: string;
+      stack: string | number;
+      is_bot: boolean;
+    }>(
+      `with old as (
+         select table_id, seat_no, member_id, stack, is_bot
+         from table_seats
+         where table_id = $1 and member_id is not null
+       ),
+       upd as (
+         update table_seats t
+         set member_id = null, display_name = '', stack = 0, is_bot = false, sitting_out = false
+         from old
+         where t.table_id = old.table_id
+           and t.seat_no = old.seat_no
+           and t.member_id = old.member_id
+         returning old.member_id, old.stack, old.is_bot
+       )
+       select member_id, stack, is_bot from upd`,
+      [tableId],
+    );
+    for (const seat of seated) {
+      const refund = Math.max(
+        num(seat.stack),
+        stateStack.get(seat.member_id) || 0,
+      );
+      if (refund <= 0) continue;
+      if (seat.is_bot) {
+        await creditBotFloat(refund, `bot_table_close:${tableId}`);
+      } else {
+        await sendChips(seat.member_id, refund, `table_close_cashout:${tableId}`);
+      }
+    }
   } else {
     // Waiting: atomically clear seats so leaveTable cannot double-cash.
     const seated = await sql<{

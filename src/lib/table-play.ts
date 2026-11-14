@@ -282,15 +282,17 @@ async function settleSquidShowdown(
   }
   squid = awardSquid(state, squid, true);
   await writeSquid(tableId, squid);
-  // Keep showdown state_json stacks in sync with the paid pot (open tables only).
+  // Keep showdown state_json stacks in sync — only for this hand.
   await sql(
     `update table_runtime r
      set state_json = $2, updated_at = now()
      from cash_tables t
      where r.table_id = $1
        and t.id = r.table_id
-       and t.status = 'open'`,
-    [tableId, JSON.stringify(state)],
+       and t.status = 'open'
+       and r.hand_no = $3
+       and r.phase = 'showdown'`,
+    [tableId, JSON.stringify(state), state.handNo],
   );
 }
 
@@ -454,16 +456,17 @@ async function applyHandEconomy(tableId: string, state: EngineState) {
     }
   }
   await syncStacksFromState(tableId, state);
-  // Persist BBJP/rake-side stack mutations so closeTable showdown cash-out
-  // cannot drop awards that only lived in memory / table_seats.
+  // Persist BBJP awards for this hand only — never clobber a newer deal.
   await sql(
     `update table_runtime r
      set state_json = $2, updated_at = now()
      from cash_tables t
      where r.table_id = $1
        and t.id = r.table_id
-       and t.status = 'open'`,
-    [tableId, JSON.stringify(state)],
+       and t.status = 'open'
+       and r.hand_no = $3
+       and r.phase = 'showdown'`,
+    [tableId, JSON.stringify(state), state.handNo],
   );
 }
 
@@ -939,24 +942,36 @@ export async function sitAtTable(
   return getTableView(tableId, memberId);
 }
 
+function betweenHands(street: string | undefined | null) {
+  return !street || street === "waiting" || street === "showdown";
+}
+
 export async function leaveTable(tableId: string, memberId: string) {
   let runtime = await readRuntime(tableId);
   // Allow leave on showdown (between-hand pause) as well as waiting — continuous
   // tables never linger on waiting when ≥2 stacks remain.
-  if (
-    runtime.state &&
-    runtime.state.street !== "waiting" &&
-    runtime.state.street !== "showdown"
-  ) {
+  if (runtime.state && !betweenHands(runtime.state.street)) {
     throw new Error("Wait for the hand to finish");
   }
   const table = await getTable(tableId);
+  const handNoAtLeave = runtime.state?.handNo ?? runtime.hand_no;
   // Finish idempotent settlement first so cash-out includes squid/BBJP awards.
   if (runtime.state?.street === "showdown" && runtime.state.result) {
     await bankSquidAnte(tableId, runtime.state, table);
     await settleSquidShowdown(tableId, runtime.state, table);
     await applyHandEconomy(tableId, runtime.state);
     runtime = await readRuntime(tableId);
+  }
+  // Auto-deal may have started the next hand while we settled.
+  if (runtime.state && !betweenHands(runtime.state.street)) {
+    throw new Error("Wait for the hand to finish");
+  }
+  if (
+    runtime.state &&
+    runtime.state.street === "showdown" &&
+    runtime.state.handNo !== handNoAtLeave
+  ) {
+    throw new Error("Wait for the hand to finish");
   }
   // Capture pre-clear stack/is_bot — RETURNING * after SET would always be 0/false.
   const claimed = await sql<{
@@ -985,9 +1000,8 @@ export async function leaveTable(tableId: string, memberId: string) {
   );
   if (!claimed.length) throw new Error("Not seated");
   const seat = claimed[0]!;
-  const stateStack = Number(
-    runtime.state?.seats.find((s) => s.memberId === memberId)?.stack ?? 0,
-  );
+  const stateSeat = runtime.state?.seats.find((s) => s.memberId === memberId);
+  const stateStack = Number(stateSeat?.stack ?? 0);
   const stack = Math.max(num(seat.stack), stateStack);
   const wasBot = seat.is_bot;
   const isTournament = table.format === "tournament";
@@ -998,6 +1012,25 @@ export async function leaveTable(tableId: string, memberId: string) {
   // Bot stacks return to the club AI float — never cash out to a player.
   if (!isTournament && wasBot && stack > 0) {
     await creditBotFloat(stack, `bot_cashout:${tableId}`);
+  }
+  // Drop the leaver from showdown state so closeTable cannot refund them again.
+  if (runtime.state?.street === "showdown" && stateSeat) {
+    stateSeat.stack = 0;
+    stateSeat.bet = 0;
+    stateSeat.memberId = "";
+    stateSeat.sittingOut = true;
+    stateSeat.hole = [];
+    await sql(
+      `update table_runtime r
+       set state_json = $2, updated_at = now()
+       from cash_tables t
+       where r.table_id = $1
+         and t.id = r.table_id
+         and t.status = 'open'
+         and r.hand_no = $3
+         and r.phase = 'showdown'`,
+      [tableId, JSON.stringify(runtime.state), runtime.state.handNo],
+    );
   }
   if (isTournament) {
     await maybeFinishTournament(tableId);
