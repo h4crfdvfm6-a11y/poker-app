@@ -6,7 +6,7 @@ Free club poker platform for Android and iPhone (web + future store wrap).
 
 - **Player lobby** — join with invite code, see tables, tournaments, BBJP
 - **Admin panel** (PIN) — add players, send chips/gems, open tables **with rake**, Spin & Gold / MTT, fund BBJP + AI float
-- **Game variants** — NLH, PLO/PLO5/PLO6, PLO Hi-Lo, Short Deck, All-in or Fold, Bomb Pot
+- **Game variants** — NLH, PLO/PLO5/PLO6, PLO Hi-Lo, Short Deck, All-in or Fold, Bomb Pot, OFC Pineapple
 - **Live tables** — sit with buy-in, play vs players/AI, automatic rake, BBJP ladder, optional Squid side pot, optional Cucurucho (ante → flop → pot-or-fold)
 - **Shop** (`/shop`) — gems buy chip packs and cosmetics (not redeemable for cash)
 - **Coach** (`/coach`) — offline practice tips (separate from live cash)

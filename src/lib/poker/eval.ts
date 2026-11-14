@@ -79,6 +79,25 @@ export function evaluateFive(cards: Card[]): HandScore {
   return [CAT.high, ...ranks];
 }
 
+/** Chinese poker front-row (3-card) evaluation. */
+export function evaluateThree(cards: Card[]): HandScore {
+  if (cards.length !== 3) throw new Error("Need 3 cards");
+  const ranks = cards.map((c) => c.r).sort((a, b) => b - a);
+  const counts = new Map<number, number>();
+  for (const r of ranks) counts.set(r, (counts.get(r) || 0) + 1);
+  const byCount = [...counts.entries()].sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return b[0] - a[0];
+  });
+  if (byCount[0]![1] === 3) return [CAT.trips, byCount[0]![0]];
+  if (byCount[0]![1] === 2) {
+    const pair = byCount[0]![0];
+    const kicker = byCount.find((x) => x[0] !== pair)![0];
+    return [CAT.pair, pair, kicker];
+  }
+  return [CAT.high, ...ranks];
+}
+
 function straightHighShort(ranks: number[]): number | null {
   const set = new Set(ranks);
   // A-6-7-8-9 is the short-deck wheel

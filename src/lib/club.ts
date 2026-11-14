@@ -360,7 +360,15 @@ export async function createTable(input: {
     : "NLH";
   // Leave room for 5 board + burns: PLO6 needs ≤7 seats on a 52-card deck.
   const maxSeats =
-    gameType === "PLO6" ? 6 : gameType === "PLO5" ? 7 : gameType === "SHORT_DECK" ? 6 : 9;
+    gameType === "OFC_PINEAPPLE"
+      ? 3
+      : gameType === "PLO6"
+        ? 6
+        : gameType === "PLO5"
+          ? 7
+          : gameType === "SHORT_DECK"
+            ? 6
+            : 9;
   const seats = Math.max(2, Math.min(maxSeats, Math.floor(input.seats) || 6));
   const squidTarget = Math.max(1, Math.min(9, Math.floor(input.squidTarget ?? 3) || 3));
   const cucuruchoAnteBb = Math.max(

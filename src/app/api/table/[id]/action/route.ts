@@ -1,6 +1,7 @@
-import { playerAction } from "@/lib/table-play";
+import { playerAction, playerOfcSet } from "@/lib/table-play";
 import { getPlayerId } from "@/lib/session";
 import type { ActionType } from "@/lib/poker/engine";
+import type { OfcPlacement } from "@/lib/poker/ofc";
 import { assertSameOrigin } from "@/lib/csrf";
 
 export async function POST(
@@ -15,13 +16,25 @@ export async function POST(
     return Response.json({ error: "Not logged in" }, { status: 401 });
   }
   const body = (await request.json().catch(() => ({}))) as {
-    type?: ActionType;
+    type?: ActionType | "ofc_set";
     amount?: number;
+    placements?: OfcPlacement[];
+    discardIndex?: number | null;
   };
-  if (!body.type) {
-    return Response.json({ error: "Action type required" }, { status: 400 });
-  }
   try {
+    if (body.type === "ofc_set") {
+      return Response.json(
+        await playerOfcSet(
+          id,
+          playerId,
+          body.placements || [],
+          body.discardIndex ?? null,
+        ),
+      );
+    }
+    if (!body.type) {
+      return Response.json({ error: "Action type required" }, { status: 400 });
+    }
     return Response.json(
       await playerAction(id, playerId, body.type, Number(body.amount ?? 0)),
     );

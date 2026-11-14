@@ -9,7 +9,8 @@ export type GameType =
   | "SHORT_DECK"
   | "AOF_NLH"
   | "AOF_PLO"
-  | "BOMB_NLH";
+  | "BOMB_NLH"
+  | "OFC_PINEAPPLE";
 
 export const GAME_TYPES: GameType[] = [
   "NLH",
@@ -21,6 +22,7 @@ export const GAME_TYPES: GameType[] = [
   "AOF_NLH",
   "AOF_PLO",
   "BOMB_NLH",
+  "OFC_PINEAPPLE",
 ];
 
 export function isGameType(v: string): v is GameType {
@@ -69,6 +71,10 @@ export function isBombPot(game: GameType): boolean {
   return game === "BOMB_NLH";
 }
 
+export function isOfc(game: GameType): boolean {
+  return game === "OFC_PINEAPPLE";
+}
+
 export function isHiLo(game: GameType): boolean {
   return game === "PLO_HILO";
 }
@@ -93,5 +99,7 @@ export function gameTypeLabel(game: GameType): string {
       return "All-in or Fold Omaha";
     case "BOMB_NLH":
       return "Bomb Pot Hold'em";
+    case "OFC_PINEAPPLE":
+      return "Open Face Chinese (Pineapple)";
   }
 }

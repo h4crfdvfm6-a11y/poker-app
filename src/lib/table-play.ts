@@ -22,11 +22,20 @@ import {
   type ActionType,
   type EngineState,
 } from "./poker/engine";
+import {
+  applyOfcSet,
+  decideOfcBot,
+  serializeOfcCards,
+  startOfcHand,
+  type OfcPlacement,
+  type OfcState,
+} from "./poker/ofc";
 import { botThinkMs, decideBotAction, styleForBot } from "./poker/bots";
 import { describeMadeHand } from "./poker/hand-display";
 import {
   isAllInOrFold,
   isGameType,
+  isOfc,
   isPotLimit,
   type GameType,
 } from "./poker/variants";
@@ -296,6 +305,12 @@ async function settleSquidShowdown(
   );
 }
 
+type RuntimeState = EngineState | OfcState;
+
+function isOfcState(state: RuntimeState | null | undefined): state is OfcState {
+  return Boolean(state && typeof state === "object" && "dealRound" in state);
+}
+
 async function readRuntime(tableId: string) {
   await ensureRuntime(tableId);
   const [row] = await sql<{
@@ -309,7 +324,7 @@ async function readRuntime(tableId: string) {
   ]);
   const state =
     row.state_json && row.state_json !== "{}"
-      ? (JSON.parse(row.state_json) as EngineState)
+      ? (JSON.parse(row.state_json) as RuntimeState)
       : null;
   return { ...row, state };
 }
@@ -320,7 +335,7 @@ async function writeRuntime(
     handNo?: number;
     button?: number;
     phase: string;
-    state: EngineState | null;
+    state: RuntimeState | null;
     version: number;
   },
 ): Promise<boolean> {
@@ -352,7 +367,10 @@ async function writeRuntime(
   return rows.length > 0;
 }
 
-async function syncStacksFromState(tableId: string, state: EngineState) {
+async function syncStacksFromState(
+  tableId: string,
+  state: { seats: Array<{ seat: number; memberId?: string; stack: number }> },
+) {
   // Only stamp stacks onto the same open-table occupant — never an emptied
   // or reseated row (leave/sit/close race during showdown settlement).
   for (const s of state.seats) {
@@ -479,11 +497,63 @@ function maskMemberId(
   return null;
 }
 
-function maskState(state: EngineState | null, viewerMemberId: string | null) {
+function maskState(state: RuntimeState | null, viewerMemberId: string | null) {
   if (!state) return null;
+  if (isOfcState(state)) {
+    return {
+      handNo: state.handNo,
+      street: state.street,
+      mode: "ofc" as const,
+      board: [] as string[],
+      button: state.button,
+      sb: 0,
+      bb: state.unit,
+      toAct: state.toAct,
+      currentBet: 0,
+      minRaise: 0,
+      pot: 0,
+      pots: [] as Array<{ amount: number }>,
+      log: state.log.slice(-12),
+      result: state.result,
+      cucurucho: false,
+      draft:
+        state.toAct != null &&
+        state.seats.some(
+          (s) => s.seat === state.toAct && s.memberId === viewerMemberId,
+        )
+          ? serializeOfcCards(state.draft)
+          : state.draft.map(() => "xx"),
+      unit: state.unit,
+      seats: state.seats.map((s) => {
+        const isSelf = Boolean(viewerMemberId && s.memberId === viewerMemberId);
+        const show = isSelf || state.street === "showdown";
+        const rows = {
+          front: show ? serializeOfcCards(s.front) : s.front.map(() => "xx"),
+          middle: show ? serializeOfcCards(s.middle) : s.middle.map(() => "xx"),
+          back: show ? serializeOfcCards(s.back) : s.back.map(() => "xx"),
+        };
+        return {
+          seat: s.seat,
+          memberId: maskMemberId(s.memberId, viewerMemberId),
+          name: s.name,
+          stack: s.stack,
+          bet: 0,
+          folded: false,
+          allIn: false,
+          sittingOut: false,
+          isBot: s.isBot,
+          hole: [...rows.front, ...rows.middle, ...rows.back],
+          ofc: rows,
+          fouled: s.fouled,
+          fantasyNext: s.fantasyNext,
+        };
+      }),
+    };
+  }
   return {
     handNo: state.handNo,
     street: state.street,
+    mode: "holdem" as const,
     board: serializeCards(state.board),
     button: state.button,
     sb: state.sb,
@@ -605,9 +675,10 @@ export async function getTableView(
   seats = await getSeats(tableId);
   const bbjp = await getBbjp();
   const mySeat = runtime.state?.seats.find((s) => s.memberId === viewerMemberId);
+  const ofcHand = isOfcState(runtime.state);
   const legal =
-    runtime.state && mySeat && refreshed.status === "open"
-      ? legalActions(runtime.state, mySeat.seat)
+    runtime.state && mySeat && refreshed.status === "open" && !ofcHand
+      ? legalActions(runtime.state as EngineState, mySeat.seat)
       : { actions: [], sizing: null };
   const myTableSeat = seats.find((s) => s.member_id === viewerMemberId);
   const gameType = (isGameType(refreshed.game_type)
@@ -616,7 +687,10 @@ export async function getTableView(
   const masked = maskState(runtime.state, viewerMemberId);
   const myLive = masked?.seats.find((s) => s.memberId === viewerMemberId);
   const handStrength =
-    myLive && myLive.hole.length && !myLive.hole.includes("xx")
+    !ofcHand &&
+    myLive &&
+    myLive.hole.length &&
+    !myLive.hole.includes("xx")
       ? describeMadeHand(myLive.hole, masked?.board ?? [], gameType)
       : null;
   let cosmetics: Awaited<ReturnType<typeof getMemberCosmetics>> | null = null;
@@ -702,7 +776,7 @@ async function maybeRunBots(
   runtime: Awaited<ReturnType<typeof readRuntime>>,
 ) {
   let current = runtime;
-  for (let guard = 0; guard < 12; guard++) {
+  for (let guard = 0; guard < 24; guard++) {
     const state = current.state;
     if (!state || state.toAct == null || state.street === "showdown") break;
     const actor = state.seats.find((s) => s.seat === state.toAct);
@@ -720,9 +794,32 @@ async function maybeRunBots(
     ) {
       break;
     }
-    const decision = decideBotAction(current.state, actor.seat);
+    if (isOfcState(current.state)) {
+      const decision = decideOfcBot(current.state, actor.seat);
+      const next = applyOfcSet(
+        current.state,
+        actor.seat,
+        decision.placements,
+        decision.discardIndex,
+      );
+      const wrote = await writeRuntime(tableId, {
+        phase: next.street === "showdown" ? "showdown" : "hand",
+        state: next,
+        version: current.version + 1,
+        handNo: next.handNo,
+        button: next.button,
+      });
+      if (!wrote) break;
+      if (next.street === "showdown") {
+        await markBustedPlayers(tableId);
+      }
+      await syncStacksFromState(tableId, next);
+      current = await readRuntime(tableId);
+      continue;
+    }
+    const decision = decideBotAction(current.state as EngineState, actor.seat);
     const next = applyAction(
-      current.state,
+      current.state as EngineState,
       actor.seat,
       decision.type,
       decision.amount ?? 0,
@@ -770,8 +867,9 @@ async function beginNextHand(tableId: string) {
     return;
   }
 
-  const bbjp = await getBbjp();
+  const gameType = (isGameType(table.game_type) ? table.game_type : "NLH") as GameType;
   const isTournament = table.format === "tournament";
+  const handNo = runtime.hand_no + 1;
   const button =
     runtime.hand_no === 0
       ? occupied[0]!.seat_no
@@ -792,7 +890,44 @@ async function beginNextHand(tableId: string) {
           runtime.button_seat,
         );
 
-  const handNo = runtime.hand_no + 1;
+  if (isOfc(gameType)) {
+    const prevFantasy = new Map<string, boolean>();
+    if (isOfcState(runtime.state)) {
+      for (const s of runtime.state.seats) {
+        if (s.fantasyNext) prevFantasy.set(s.memberId, true);
+      }
+    }
+    const ofc = startOfcHand(
+      occupied.map((s) => ({
+        seat: s.seat_no,
+        memberId: s.member_id!,
+        name: s.display_name,
+        stack: num(s.stack),
+        isBot: s.is_bot,
+        fantasy: prevFantasy.get(s.member_id!) || false,
+      })),
+      { handNo, button, unit: num(table.bb) || 100 },
+    );
+    const phase =
+      ofc.street === "waiting"
+        ? "waiting"
+        : ofc.street === "showdown"
+          ? "showdown"
+          : "hand";
+    const wrote = await writeRuntime(tableId, {
+      handNo,
+      button,
+      phase,
+      state: ofc,
+      version: runtime.version + 1,
+    });
+    if (!wrote) return;
+    await syncStacksFromState(tableId, ofc);
+    await maybeRunBots(tableId, await readRuntime(tableId));
+    return;
+  }
+
+  const bbjp = await getBbjp();
   const squidEnabled = !isTournament && Boolean(table.squid_enabled);
   const cucuruchoEvery = Math.max(
     1,
@@ -827,7 +962,7 @@ async function beginNextHand(tableId: string) {
       rakeCapBb: isTournament ? 0 : num(table.rake_cap_bb),
       bbjpEnabled: !isTournament && Boolean(table.bbjp_enabled) && bbjp.enabled,
       bbjpTrigger: bbjp.trigger_hand,
-      gameType: (isGameType(table.game_type) ? table.game_type : "NLH") as GameType,
+      gameType,
       squidAnte,
       cucuruchoAnte,
     },
@@ -956,7 +1091,11 @@ export async function leaveTable(tableId: string, memberId: string) {
   const table = await getTable(tableId);
   const handNoAtLeave = runtime.state?.handNo ?? runtime.hand_no;
   // Finish idempotent settlement first so cash-out includes squid/BBJP awards.
-  if (runtime.state?.street === "showdown" && runtime.state.result) {
+  if (
+    runtime.state?.street === "showdown" &&
+    runtime.state.result &&
+    !isOfcState(runtime.state)
+  ) {
     await bankSquidAnte(tableId, runtime.state, table);
     await settleSquidShowdown(tableId, runtime.state, table);
     await applyHandEconomy(tableId, runtime.state);
@@ -1016,10 +1155,18 @@ export async function leaveTable(tableId: string, memberId: string) {
   // Drop the leaver from showdown state so closeTable cannot refund them again.
   if (runtime.state?.street === "showdown" && stateSeat) {
     stateSeat.stack = 0;
-    stateSeat.bet = 0;
     stateSeat.memberId = "";
-    stateSeat.sittingOut = true;
-    stateSeat.hole = [];
+    if (!isOfcState(runtime.state)) {
+      const holdemSeat = stateSeat as EngineState["seats"][number];
+      holdemSeat.bet = 0;
+      holdemSeat.sittingOut = true;
+      holdemSeat.hole = [];
+    } else {
+      const ofcSeat = stateSeat as OfcState["seats"][number];
+      ofcSeat.front = [];
+      ofcSeat.middle = [];
+      ofcSeat.back = [];
+    }
     await sql(
       `update table_runtime r
        set state_json = $2, updated_at = now()
@@ -1095,6 +1242,36 @@ export async function addBot(tableId: string, seatNo?: number) {
   return getTableView(tableId, null, { advance: true });
 }
 
+export async function playerOfcSet(
+  tableId: string,
+  memberId: string,
+  placements: OfcPlacement[],
+  discardIndex: number | null = null,
+) {
+  const runtime = await readRuntime(tableId);
+  if (!runtime.state || !isOfcState(runtime.state)) {
+    throw new Error("Not an OFC hand");
+  }
+  const seat = runtime.state.seats.find((s) => s.memberId === memberId);
+  if (!seat) throw new Error("Not at this table");
+  if (runtime.state.toAct !== seat.seat) throw new Error("Not your turn");
+  const next = applyOfcSet(runtime.state, seat.seat, placements, discardIndex);
+  const wrote = await writeRuntime(tableId, {
+    phase: next.street === "showdown" ? "showdown" : "hand",
+    state: next,
+    version: runtime.version + 1,
+    handNo: next.handNo,
+    button: next.button,
+  });
+  if (!wrote) throw new Error("Table updated — try again");
+  if (next.street === "showdown") {
+    await markBustedPlayers(tableId);
+  }
+  await syncStacksFromState(tableId, next);
+  await maybeRunBots(tableId, await readRuntime(tableId));
+  return getTableView(tableId, memberId);
+}
+
 export async function playerAction(
   tableId: string,
   memberId: string,
@@ -1103,6 +1280,9 @@ export async function playerAction(
 ) {
   const runtime = await readRuntime(tableId);
   if (!runtime.state) throw new Error("No hand in progress");
+  if (isOfcState(runtime.state)) {
+    throw new Error("Use OFC set action on this table");
+  }
   const seat = runtime.state.seats.find((s) => s.memberId === memberId);
   if (!seat) throw new Error("Not at this table");
   if (runtime.state.toAct !== seat.seat) throw new Error("Not your turn");

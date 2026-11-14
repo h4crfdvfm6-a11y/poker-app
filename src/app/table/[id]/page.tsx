@@ -60,17 +60,28 @@ type TableView = {
   hand: null | {
     handNo: number;
     street: string;
+    mode?: "holdem" | "ofc";
     board: string[];
     button: number;
     toAct: number | null;
     pot: number;
     currentBet: number;
     log: string[];
+    draft?: string[];
+    unit?: number;
     result: null | {
-      winners: Array<{ seat: number; amount: number; hand?: string }>;
-      rake: number;
-      bbjpFee: number;
+      winners?: Array<{ seat: number; amount: number; hand?: string }>;
+      rake?: number;
+      bbjpFee?: number;
       bbjpHit?: unknown;
+      deltas?: Record<string, number>;
+      rows?: Array<{
+        memberId: string;
+        front: string;
+        middle: string;
+        back: string;
+        fouled: boolean;
+      }>;
     };
     cucurucho?: boolean;
     seats: Array<{
@@ -83,6 +94,8 @@ type TableView = {
       allIn: boolean;
       isBot: boolean;
       hole: string[];
+      ofc?: { front: string[]; middle: string[]; back: string[] };
+      fouled?: boolean;
     }>;
   };
   handStrength?: null | {
@@ -297,6 +310,68 @@ export default function TablePage() {
     setBusy(false);
     if (!res.ok) {
       setError(json.error || "Action failed");
+      return;
+    }
+    setView(json);
+  }
+
+  async function ofcAutoSet() {
+    if (!view?.hand?.draft?.length || view.meSeat == null) return;
+    const draft = view.hand.draft;
+    const mine = view.hand.seats.find((s) => s.seat === view.meSeat);
+    const frontN = mine?.ofc?.front.length ?? 0;
+    const midN = mine?.ofc?.middle.length ?? 0;
+    const backN = mine?.ofc?.back.length ?? 0;
+    const caps = {
+      front: Math.max(0, 3 - frontN),
+      middle: Math.max(0, 5 - midN),
+      back: Math.max(0, 5 - backN),
+    };
+    const order: Array<"back" | "middle" | "front"> = [];
+    for (let i = 0; i < caps.back; i++) order.push("back");
+    for (let i = 0; i < caps.middle; i++) order.push("middle");
+    for (let i = 0; i < caps.front; i++) order.push("front");
+    if (draft.length === 5) {
+      const placements = draft.map((_, i) => ({
+        cardIndex: i,
+        row: order[i] || "front",
+      }));
+      setBusy(true);
+      setError("");
+      const res = await fetch(`/api/table/${tableId}/action`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "ofc_set", placements }),
+      });
+      const json = await res.json();
+      setBusy(false);
+      if (!res.ok) {
+        setError(json.error || "OFC set failed");
+        return;
+      }
+      setView(json);
+      return;
+    }
+    // Pineapple: keep first two into open rows, discard last.
+    const placements = [
+      { cardIndex: 0, row: order[0] || "front" },
+      { cardIndex: 1, row: order[1] || order[0] || "front" },
+    ];
+    setBusy(true);
+    setError("");
+    const res = await fetch(`/api/table/${tableId}/action`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "ofc_set",
+        placements,
+        discardIndex: 2,
+      }),
+    });
+    const json = await res.json();
+    setBusy(false);
+    if (!res.ok) {
+      setError(json.error || "OFC set failed");
       return;
     }
     setView(json);
@@ -586,6 +661,48 @@ export default function TablePage() {
         </div>
       ) : null}
 
+      {view.hand?.mode === "ofc" &&
+      view.hand.toAct === view.meSeat &&
+      (view.hand.draft?.length ?? 0) > 0 ? (
+        <div className="panel mb-3 grid gap-2 p-3">
+          <div className="text-sm text-[var(--gold-strong)]">
+            OFC Pineapple — set your cards
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {(view.hand.draft || []).map((c, i) => (
+              <CardPipe key={`${c}-${i}`} card={c} cardBack={view.cosmetics?.cardBack} />
+            ))}
+          </div>
+          <p className="text-xs text-[var(--muted)]">
+            {view.hand.draft?.length === 5
+              ? "Place all 5 into front (3) / middle (5) / back (5)."
+              : "Keep 2, discard 1. Auto-set fills back → middle → front."}
+          </p>
+          <button
+            className="btn btn-gold"
+            disabled={busy}
+            onClick={() => void ofcAutoSet()}
+          >
+            Auto-set this deal
+          </button>
+        </div>
+      ) : null}
+
+      {view.hand?.mode === "ofc" && view.hand.result?.rows ? (
+        <div className="panel mb-3 p-3 text-sm">
+          <div className="mb-1 font-semibold text-[var(--gold-strong)]">OFC result</div>
+          {view.hand.result.rows.map((r) => (
+            <div key={r.memberId} className="text-xs text-[var(--muted)]">
+              {r.fouled ? "Foul · " : ""}
+              F {r.front} · M {r.middle} · B {r.back}
+              {view.hand?.result?.deltas?.[r.memberId] != null
+                ? ` · ${view.hand.result.deltas[r.memberId]! >= 0 ? "+" : ""}${view.hand.result.deltas[r.memberId]}`
+                : ""}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {view.actions?.length ? (
         <div className="mb-3 grid gap-3">
           {view.sizing ? (
@@ -646,6 +763,12 @@ export default function TablePage() {
               ))}
           </div>
         </div>
+      ) : view.hand?.mode === "ofc" ? (
+        <p className="mb-3 text-sm text-[var(--muted)]">
+          {view.hand.toAct === view.meSeat
+            ? "Set your OFC rows above."
+            : "Waiting for the other OFC player to set…"}
+        </p>
       ) : (
         <p className="mb-3 text-sm text-[var(--muted)]">
           {isTournament

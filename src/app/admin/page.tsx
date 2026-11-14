@@ -560,6 +560,7 @@ export default function AdminPage() {
                 <option value="AOF_NLH">All-in or Fold Hold&apos;em</option>
                 <option value="AOF_PLO">All-in or Fold Omaha</option>
                 <option value="BOMB_NLH">Bomb Pot Hold&apos;em</option>
+                <option value="OFC_PINEAPPLE">OFC Pineapple (Open Face)</option>
               </select>
             </div>
             <div>
